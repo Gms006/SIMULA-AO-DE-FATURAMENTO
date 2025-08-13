@@ -87,3 +87,11 @@ streamlit run app.py
 │  └─ test_calc.py
 ├─ bootstrap.sh
 └─ README.md
+
+### Streamlit Cloud
+1. Faça fork deste repositório no GitHub.
+2. No [Streamlit Cloud](https://streamlit.io/cloud), clique em "Deploy" e informe:
+   - Repository: `<seu-usuario>/SIMULA-AO-DE-FATURAMENTO`
+   - Branch: `main`
+   - Main file: `app.py`
+3. Defina as variáveis de ambiente se necessário e finalize o deploy.
