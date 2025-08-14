@@ -1,271 +1,208 @@
+
 import streamlit as st
 import pandas as pd
 from io import BytesIO
-from datetime import datetime
-from calc import (
-    compute_realizado,
-    meses_simulaveis,
-    calc_por_margem,
-    base_pis_cofins,
-    irpj_csll_trimestrais,
-    MARGENS,
-)
+from calc import realizado_por_mes, cenarios_por_margem, irpj_csll_trimestre
+from ui_helpers import brl, cenarios_fat_compra, pis_cofins, yyyymm_to_label, MARGENS
 
+
+def inject_css():
+    st.markdown(
+        """
+        <style>
+        .app-container {max-width: 1280px; margin: 0 auto;}
+        section.main > div {padding-top: 0.5rem;}
+        .kpi-grid {display: grid; grid-template-columns: repeat(5, 1fr); gap: 14px;}
+        @media (max-width: 1200px){ .kpi-grid {grid-template-columns: repeat(3, 1fr);} }
+        @media (max-width: 780px){ .kpi-grid {grid-template-columns: repeat(2, 1fr);} }
+        @media (max-width: 520px){ .kpi-grid {grid-template-columns: 1fr;} }
+        .card {border:1px solid #E5E7EB;background:#FFF;border-radius:12px;padding:16px 16px 14px;box-shadow:0 2px 6px rgba(15,23,42,.05);}
+        .card h4 {font-size:12.5px;font-weight:600;letter-spacing:.3px;color:#475569;margin:0 0 6px 0;text-transform:uppercase;}
+        .card .value {font-variant-numeric:tabular-nums;font-weight:700;font-size:26px;color:#0F172A;margin:0;}
+        .muted { color:#64748B; font-size:12px; margin-top:4px; }
+        .section {margin-top:18px;margin-bottom:6px;}
+        .section h3 {margin:0;font-size:18px;}
+        .section .sub {color:#64748B;font-size:12.5px;margin-top:2px;}
+        .metric-grid {display:grid;grid-template-columns:repeat(3,1fr);gap:14px;}
+        @media (max-width:900px){ .metric-grid {grid-template-columns:1fr;} }
+        </style>
+        """,
+        unsafe_allow_html=True,
+    )
+
+
+inject_css()
 st.set_page_config(page_title="Simulação de Faturamento 2025", layout="wide")
 
-MESES_PT = {
-    1: "Jan", 2: "Fev", 3: "Mar", 4: "Abr", 5: "Mai", 6: "Jun",
-    7: "Jul", 8: "Ago", 9: "Set", 10: "Out", 11: "Nov", 12: "Dez",
-}
+MESES_PT = {1:"Jan",2:"Fev",3:"Mar",4:"Abr",5:"Mai",6:"Jun",7:"Jul",8:"Ago",9:"Set",10:"Out",11:"Nov",12:"Dez"}
 
 
-def fmt_brl(v: float) -> str:
-    try:
-        return f"R$ {float(v):,.2f}".replace(",", "X").replace(".", ",").replace("X", ".")
-    except Exception:
-        return "R$ 0,00"
-
-
-def to_excel(df: pd.DataFrame) -> bytes:
-    buffer = BytesIO()
-    with pd.ExcelWriter(buffer, engine="openpyxl") as writer:
-        df.to_excel(writer, index=False)
-    return buffer.getvalue()
-
-
-@st.cache_data(ttl=300)
-def load_data(owner: str, repo: str, branch: str, path: str) -> pd.DataFrame:
-    url = f"https://raw.githubusercontent.com/{owner}/{repo}/{branch}/{path}"
+def load_data() -> pd.DataFrame:
+    url = "https://raw.githubusercontent.com/eduardoveiculos/SIMULA-AO-DE-FATURAMENTO/main/resultado_eduardo_veiculos.xlsx"
     try:
         return pd.read_excel(url, engine="openpyxl")
     except Exception:
         try:
-            return pd.read_excel(path, engine="openpyxl")
+            return pd.read_excel("resultado_eduardo_veiculos.xlsx", engine="openpyxl")
         except Exception:
+            up = st.file_uploader("Carregar planilha", type=["xlsx"])
+            if up:
+                return pd.read_excel(up, engine="openpyxl")
             return pd.DataFrame()
 
 
-def propagate_lat():
-    df = st.session_state["tabela"].copy()
-    idx = (st.session_state.get("mes_sel", 202501) % 100) - 1
-    val = df.at[idx, "LAT"]
-    locked = st.session_state.get("locked", [])
-    for j in range(idx + 1, 12):
-        if j not in locked:
-            df.at[j, "LAT"] = val
-    st.session_state["tabela"] = df
+@st.cache_data(ttl=300)
+def get_realizado():
+    df_raw = load_data()
+    if df_raw.empty:
+        return pd.DataFrame(), 0
+    realizado = realizado_por_mes(df_raw)
+    non_zero = realizado[(realizado[["FAT","COMPRAS"]] != 0).any(axis=1)]
+    mes_vigente = int(non_zero.index.max()) if not non_zero.empty else 202501
+    return realizado, mes_vigente
 
 
-def reset_lat():
-    df = st.session_state["tabela"].copy()
-    df["LAT"] = 0.0
-    for j, v in st.session_state.get("real_lat", {}).items():
-        df.at[j, "LAT"] = v
-    st.session_state["tabela"] = df
-
-
-# =========================
-# Sidebar
-# =========================
-DEFAULTS = {
-    "owner": "eduardoveiculos",
-    "repo": "SIMULA-AO-DE-FATURAMENTO",
-    "branch": "main",
-    "path": "resultado_eduardo_veiculos.xlsx",
-}
+realizado, mes_vigente = get_realizado()
 
 with st.sidebar:
     st.header("Simulação")
-    ano = st.selectbox("Ano", [2025], index=0)
+    st.selectbox("Ano", [2025], index=0)
     sim_vigente = st.checkbox("Simular mês vigente", value=False)
-    base_tipo = st.segmented_control(
-        "Base PIS/COFINS",
-        options=["Lucro do mês (LAT)", "Receita (FAT)", "Margem (FAT*m)"],
-        default="Lucro do mês (LAT)",
-    )
-    col1, col2 = st.columns(2)
-    aliq_pis = col1.number_input(
-        "PIS (%)", min_value=0.0, max_value=10.0, value=0.65, step=0.01
-    )
-    aliq_cof = col2.number_input(
-        "COFINS (%)", min_value=0.0, max_value=10.0, value=3.0, step=0.1
-    )
     st.divider()
-    colA, colB = st.columns(2)
-    if colA.button("Propagar LAT para próximos meses", key="btn_propag"):
-        propagate_lat()
-    if colB.button("Zerar simulação", type="secondary", key="btn_zerar"):
-        reset_lat()
-
-with st.expander("Fonte de dados (opcional)", expanded=False):
-    st.caption("Parâmetros avançados para debugging")
-    owner = st.text_input("Owner", value=DEFAULTS["owner"])
-    repo = st.text_input("Repo", value=DEFAULTS["repo"])
-    branch = st.text_input("Branch", value=DEFAULTS["branch"])
-    path = st.text_input("Path", value=DEFAULTS["path"])
-
-# =========================
-# Carregamento de dados
-# =========================
-df_raw = load_data(owner, repo, branch, path)
-realizado = compute_realizado(df_raw) if not df_raw.empty else pd.DataFrame()
-
-lat_map_real: dict[int, float] = {}
-if not realizado.empty:
-    for idx, row in realizado.iterrows():
-        if row["LAT"] > 0:
-            lat_map_real[idx - 1] = float(row["LAT"])
+    if st.button("Propagar LAT do mês atual para os próximos"):
+        if "mes_sel" in st.session_state:
+            idx = st.session_state["mes_sel"]%100-1
+            val = st.session_state["tabela"].at[idx,"LAT (R$)"]
+            for j in range(idx+1,12):
+                st.session_state["tabela"].at[j,"LAT (R$)"]=val
+    if st.button("Zerar simulação", type="secondary"):
+        for j in range(12):
+            y = 202501+j
+            if y>=mes_vigente:
+                st.session_state["tabela"].at[j,"LAT (R$)"]=0.0
 
 if "tabela" not in st.session_state:
-    st.session_state["tabela"] = pd.DataFrame(
-        {
-            "Mês": [MESES_PT[i] for i in range(1, 13)],
-            "LAT": [0.0] * 12,
-            "Obs": [""] * 12,
-        }
-    )
-    st.session_state["locked"] = list(lat_map_real.keys())
-    st.session_state["real_lat"] = lat_map_real
-    for j, v in lat_map_real.items():
-        st.session_state["tabela"].at[j, "LAT"] = v
+    tbl = pd.DataFrame({"Mês":[MESES_PT[i] for i in range(1,13)],"LAT (R$)":[0.0]*12,"Obs":[""]*12})
+    for i,y in enumerate(range(202501,202513)):
+        if y<mes_vigente:
+            tbl.at[i,"LAT (R$)"]=realizado.at[y,"LAT"]
+    st.session_state["tabela"] = tbl
+    st.session_state["real_lat"]={i:realizado.at[202501+i,"LAT"] for i in range(12) if 202501+i<=mes_vigente}
+    st.session_state["real_fat"]={i:realizado.at[202501+i,"FAT"] for i in range(12) if 202501+i<=mes_vigente}
+    st.session_state["real_comp"]={i:realizado.at[202501+i,"COMPRAS"] for i in range(12) if 202501+i<=mes_vigente}
 
-# Botão para preencher YTD
-if st.button("Preencher pelos valores reais YTD"):
-    for j, v in lat_map_real.items():
-        st.session_state["tabela"].at[j, "LAT"] = v
-        if j not in st.session_state["locked"]:
-            st.session_state["locked"].append(j)
-
-# Data editor
-mask = pd.DataFrame(False, index=st.session_state["tabela"].index, columns=st.session_state["tabela"].columns)
-mask.loc[st.session_state["locked"], "LAT"] = True
-df_edit = st.data_editor(
+lock = [i for i in range((mes_vigente%100)-1)]
+if not sim_vigente:
+    lock.append((mes_vigente%100)-1)
+mask = pd.DataFrame(False,index=range(12),columns=["Mês","LAT (R$)","Obs"])
+mask.loc[lock,"LAT (R$)"]=True
+edit = st.data_editor(
     st.session_state["tabela"],
+    hide_index=True,
     column_config={
-        "Mês": st.column_config.Column(disabled=True),
-        "LAT": st.column_config.NumberColumn("LAT (R$)", min_value=0.0, format="R$ %,.2f"),
-        "Obs": st.column_config.TextColumn("Obs"),
+        "Mês": st.column_config.TextColumn("Mês", disabled=True, width="small"),
+        "LAT (R$)": st.column_config.NumberColumn("LAT (R$)", min_value=0.0, step=100.0, format="R$ %.2f"),
+        "Obs": st.column_config.TextColumn("Obs", width="medium"),
     },
     disabled=mask,
     num_rows="fixed",
     use_container_width=True,
 )
-st.session_state["tabela"] = df_edit
+for i,v in st.session_state["real_lat"].items():
+    edit.at[i,"LAT (R$)"]=v
+st.session_state["tabela"]=edit
 
-# =========================
-# KPIs YTD
-# =========================
 if not realizado.empty:
-    ytd = realizado.sum()
-    c1, c2, c3, c4, c5 = st.columns(5)
-    c1.metric("Entradas", fmt_brl(ytd["Compras"]))
-    c2.metric("Saídas", fmt_brl(ytd["FAT"]))
-    c3.metric("LAT", fmt_brl(ytd["LAT"]))
-    c4.metric("Lucro Líquido", fmt_brl(ytd["LL"]))
-    c5.metric("Consumo", fmt_brl(ytd["CONSUMO"]))
+    ytd = realizado.loc[realizado.index<=mes_vigente].sum()
+    lat_dict = realizado.loc[realizado.index<=mes_vigente,"LAT"].to_dict()
+    trib_ytd = irpj_csll_trimestre(lat_dict)
+    irpj_ytd = sum(v[0] for m,v in trib_ytd.items() if m<=mes_vigente)
+    csll_ytd = sum(v[1] for m,v in trib_ytd.items() if m<=mes_vigente)
+    pis_ytd = 0.0065*ytd["LAT"]
+    cof_ytd = 0.03*ytd["LAT"]
+    icms_ytd = 0.05*ytd["FAT"]
+    lucro_liq = ytd["LAT"]-(pis_ytd+cof_ytd+icms_ytd+irpj_ytd+csll_ytd)
+    st.markdown('<div class="kpi-grid">', unsafe_allow_html=True)
+    st.markdown(f'<div class="card"><h4>Entradas</h4><p class="value">{brl(ytd["COMPRAS"])}</p></div>', unsafe_allow_html=True)
+    st.markdown(f'<div class="card"><h4>Saídas</h4><p class="value">{brl(ytd["FAT"])}</p></div>', unsafe_allow_html=True)
+    st.markdown(f'<div class="card"><h4>LAT</h4><p class="value">{brl(ytd["LAT"])}</p></div>', unsafe_allow_html=True)
+    st.markdown(f'<div class="card warn"><h4>Lucro Líquido</h4><p class="value">{brl(lucro_liq)}</p></div>', unsafe_allow_html=True)
+    st.markdown(f'<div class="card"><h4>Mês Vigente</h4><p class="value">{yyyymm_to_label(mes_vigente)}</p></div>', unsafe_allow_html=True)
+    st.markdown('</div>', unsafe_allow_html=True)
 
-# =========================
-# Mês selecionado
-# =========================
-ultimo_real = 0
-if not realizado.empty:
-    ultimo_real = int(realizado[realizado["LAT"] > 0]["yyyymm"].max())
-meses_disp = meses_simulaveis(ultimo_real, sim_vigente, ano)
-mes_sel = st.segmented_control(
-    "Mês",
-    options=[202500 + m for m in range(1, 13)],
-    default=meses_disp[0] if meses_disp else 202501,
-    format_func=lambda x: MESES_PT[x % 100],
-)
-st.session_state["mes_sel"] = mes_sel
+meses = [202500+i for i in range(1,13)]
+mes_sel = st.segmented_control("Mês", options=meses, default=meses[0], format_func=lambda x: MESES_PT[x%100])
+st.session_state["mes_sel"]=mes_sel
 
-idx_sel = (mes_sel % 100) - 1
-lat_sel = st.session_state["tabela"].at[idx_sel, "LAT"]
+lat_total = {}
+for i,y in enumerate(meses):
+    real = st.session_state["real_lat"].get(i,0.0)
+    sim = st.session_state["tabela"].at[i,"LAT (R$)"] if y>=mes_vigente else 0.0
+    if y<mes_vigente:
+        lat_total[y]=real
+    elif y==mes_vigente:
+        lat_total[y]=real + (sim if sim_vigente else 0.0)
+    else:
+        lat_total[y]=sim
+trib_map = irpj_csll_trimestre(lat_total)
 
-with st.expander(f"{MESES_PT[mes_sel % 100]} {ano}", expanded=True):
-    margem = st.segmented_control(
-        "Cenários um-clique",
-        options=MARGENS,
-        default=0.20,
-        format_func=lambda x: f"{int(x*100)}%",
-    )
-    res_m = calc_por_margem(lat_sel, margem)
-    fat_ref = calc_por_margem(lat_sel, 0.20)["FAT"]
-    pis, cofins = base_pis_cofins(
-        base_tipo, lat_sel, fat_ref, 0.20, aliq_pis / 100, aliq_cof / 100
-    )
+idx = mes_sel%100-1
+if mes_sel<mes_vigente:
+    lat_mes = st.session_state["real_lat"].get(idx,0.0)
+elif mes_sel==mes_vigente:
+    lat_real = st.session_state["real_lat"].get(idx,0.0)
+    lat_sim = st.session_state["tabela"].at[idx,"LAT (R$)"] if sim_vigente else 0.0
+    lat_mes = lat_real + lat_sim
+else:
+    lat_mes = st.session_state["tabela"].at[idx,"LAT (R$)"]
 
-    c1, c2, c3 = st.columns(3)
-    c1.metric("Faturamento", fmt_brl(res_m["FAT"]))
-    c2.metric("Compras", fmt_brl(res_m["COMPRAS"]))
-    c3.metric("ICMS", fmt_brl(res_m["ICMS"]))
-    c4, c5 = st.columns(2)
-    c4.metric("PIS", fmt_brl(pis))
-    c5.metric("COFINS", fmt_brl(cofins))
+cen = cenarios_fat_compra(lat_mes)
+pis_mes, cof_mes = pis_cofins(lat_mes)
+ref = st.segmented_control("Cenário", options=[int(m*100) for m in MARGENS], default=20, format_func=lambda x: f"{x}%")
+vals = cen.get(ref,{"FAT":0.0,"COMPRA":0.0,"ICMS":0.0})
 
-    lat_dict = {
-        202500 + i + 1: float(st.session_state["tabela"].at[i, "LAT"])
-        for i in range(12)
-    }
-    irpj_map = irpj_csll_trimestrais(lat_dict)
-    irpj, csll = irpj_map.get(mes_sel, (0.0, 0.0))
-    if irpj or csll:
-        cc1, cc2 = st.columns(2)
-        cc1.metric("IRPJ", fmt_brl(irpj))
-        cc2.metric("CSLL", fmt_brl(csll))
+st.markdown('<div class="section"><h3>Simulação do mês</h3><div class="sub">FAT/Compra variam por margem; PIS/COFINS fixos sobre o LAT</div></div>', unsafe_allow_html=True)
 
-    df_mes = pd.DataFrame(
-        {
-            "LAT": [lat_sel],
-            "FAT": [res_m["FAT"]],
-            "Compras": [res_m["COMPRAS"]],
-            "ICMS": [res_m["ICMS"]],
-            "PIS": [pis],
-            "COFINS": [cofins],
-            "IRPJ": [irpj],
-            "CSLL": [csll],
-        }
-    )
-    st.download_button(
-        "Baixar CSV do mês",
-        df_mes.to_csv(index=False).encode("utf-8"),
-        file_name=f"mes_{mes_sel}.csv",
-        mime="text/csv",
-    )
+st.markdown('<div class="metric-grid">', unsafe_allow_html=True)
+st.markdown(f'<div class="card"><h4>Faturamento (ref. {ref}%)</h4><p class="value">{brl(vals["FAT"])}</p></div>', unsafe_allow_html=True)
+st.markdown(f'<div class="card"><h4>Compras (ref. {ref}%)</h4><p class="value">{brl(vals["COMPRA"])}</p></div>', unsafe_allow_html=True)
+st.markdown(f'<div class="card"><h4>ICMS (ref. {ref}%)</h4><p class="value">{brl(vals["ICMS"])}</p></div>', unsafe_allow_html=True)
+st.markdown('</div>', unsafe_allow_html=True)
 
-# =========================
-# Exportação anual
-# =========================
-st.markdown("---")
-lat_dict = {202500 + i + 1: float(st.session_state["tabela"].at[i, "LAT"]) for i in range(12)}
-irpj_map = irpj_csll_trimestrais(lat_dict)
-rows = []
-for i in range(12):
-    y = 202500 + i + 1
-    lat = lat_dict.get(y, 0.0)
-    fat20 = calc_por_margem(lat, 0.20)["FAT"]
-    compras20 = fat20 - lat
-    icms20 = 0.05 * fat20
-    pis, cof = base_pis_cofins(base_tipo, lat, fat20, 0.20, aliq_pis / 100, aliq_cof / 100)
-    irpj, csll = irpj_map.get(y, (0.0, 0.0))
-    rows.append(
-        {
-            "yyyymm": y,
-            "LAT": lat,
-            "FAT": fat20,
-            "Compras": compras20,
-            "ICMS": icms20,
-            "PIS": pis,
-            "COFINS": cof,
-            "IRPJ": irpj,
-            "CSLL": csll,
-        }
-    )
+st.markdown('<div class="metric-grid">', unsafe_allow_html=True)
+st.markdown(f'<div class="card"><h4>PIS (mês)</h4><p class="value">{brl(pis_mes)}</p></div>', unsafe_allow_html=True)
+st.markdown(f'<div class="card"><h4>COFINS (mês)</h4><p class="value">{brl(cof_mes)}</p></div>', unsafe_allow_html=True)
+if mes_sel in trib_map:
+    irpj, csll = trib_map[mes_sel]
+    st.markdown(f'<div class="card"><h4>IRPJ</h4><p class="value">{brl(irpj)}</p></div>', unsafe_allow_html=True)
+    st.markdown(f'<div class="card"><h4>CSLL</h4><p class="value">{brl(csll)}</p></div>', unsafe_allow_html=True)
+st.markdown('</div>', unsafe_allow_html=True)
 
-df_anual = pd.DataFrame(rows)
-st.download_button(
-    "Baixar Consolidado Anual (XLSX)",
-    to_excel(df_anual),
-    file_name="consolidado_2025.xlsx",
-    mime="application/vnd.openxmlformats-officedocument.spreadsheetml.sheet",
-)
+# mês vigente breakdown
+if mes_sel==mes_vigente and sim_vigente:
+    lat_real = st.session_state["real_lat"].get(idx,0.0)
+    lat_sim = st.session_state["tabela"].at[idx,"LAT (R$)"]
+    st.markdown(f"Realizado até agora: {brl(lat_real)} | Simulado: {brl(lat_sim)} | Total do mês: {brl(lat_real+lat_sim)}")
+
+# exportações
+mes_df = pd.DataFrame({
+    "Mês":[MESES_PT[mes_sel%100]],
+    "LAT":[lat_mes],
+    "PIS":[pis_mes],
+    "COFINS":[cof_mes],
+})
+st.download_button("Baixar resumo do mês", data=mes_df.to_csv(index=False).encode("utf-8"), file_name=f"resumo_{mes_sel}.csv", mime="text/csv")
+
+rows=[]
+for y in meses:
+    lat = lat_total[y]
+    cen20 = cenarios_por_margem(lat)[20]
+    pis, cof = pis_cofins(lat)
+    irpj, csll = trib_map.get(y,(0.0,0.0))
+    rows.append({"Mês": yyyymm_to_label(y), "LAT": lat, "FAT": cen20["FAT"], "COMPRAS": cen20["COMPRAS"], "PIS": pis, "COFINS": cof, "IRPJ": irpj, "CSLL": csll})
+annual = pd.DataFrame(rows)
+
+buf = BytesIO()
+with pd.ExcelWriter(buf, engine="openpyxl") as w:
+    annual.to_excel(w, index=False)
+st.download_button("Baixar Consolidado Anual (XLSX)", data=buf.getvalue(), file_name="consolidado.xlsx")
