@@ -4,8 +4,8 @@ from io import BytesIO
 from datetime import datetime
 
 from calc import (
-    realizado_por_mes,      # pode retornar DataFrame OU dict por yyyymm → {FAT, COMPRAS, LAT}
-    irpj_csll_trimestre,    # cálculo trimestral a partir de dict {yyyymm: LAT}
+    realizado_por_mes,      # DataFrame OU dict por yyyymm -> {FAT, COMPRAS, LAT}
+    irpj_csll_trimestre,    # cálculo trimestral (usa dict {yyyymm: LAT})
     MARGENS,
 )
 from ui_helpers import brl, pis_cofins, yyyymm_to_label
@@ -18,59 +18,41 @@ st.set_page_config(page_title="Simulação de Faturamento 2025", layout="wide")
 def inject_css():
     st.markdown(
         """
-        <style>
-        .app-container {max-width: 1280px; margin: 0 auto;}
-        section.main > div {padding-top: .25rem;}
-
-        .kpi-grid {display: grid; grid-template-columns: repeat(5, 1fr); gap: 14px;}
-        @media (max-width: 1200px){ .kpi-grid {grid-template-columns: repeat(3, 1fr);} }
-        @media (max-width: 780px){ .kpi-grid {grid-template-columns: repeat(2, 1fr);} }
-        @media (max-width: 520px){ .kpi-grid {grid-template-columns: 1fr;} }
-
-        .metric-grid {display:grid; grid-template-columns: repeat(3,1fr); gap:14px;}
-        @media (max-width: 900px){ .metric-grid {grid-template-columns: 1fr; } }
-
-        .panel {border:1px solid #E5E7EB; background:#FFFFFF; border-radius:12px; padding:14px 16px; box-shadow: 0 2px 6px rgba(15,23,42,.05);}
-        .panel h4 {margin:0 0 6px 0; font-size:13px; color:#334155; text-transform:uppercase; letter-spacing:.2px;}
-        .panel .label {font-size:12px; color:#475569; margin-bottom:4px;}
-        .panel .muted { color:#64748B; font-size: 12px; margin-top: 4px; }
-
-        .card {
-            border: 1px solid #E5E7EB;
-            background: #FFFFFF;
-            border-radius: 12px;
-            padding: 16px 16px 14px;
-            box-shadow: 0 2px 6px rgba(15, 23, 42, .05);
-        }
-        .card h4 {
-            font-size: 12.5px; font-weight: 700; letter-spacing: .3px;
-            color: #334155; margin: 0 0 6px 0; text-transform: uppercase;
-        }
-        .card .value {
-            font-variant-numeric: tabular-nums;
-            font-weight: 800; font-size: 26px; color: #0F172A; margin: 0;
-        }
-        .muted { color:#475569; font-size: 12px; margin-top: 4px; }
-        .ok    { border-color:#D1FAE5; background: #ECFDF5; }
-        .warn  { border-color:#FEF3C7; background: #FFFBEB; }
-        .bad   { border-color:#FEE2E2; background: #FEF2F2; }
-
-        .section {margin-top: 18px; margin-bottom: 6px;}
-        .section h3 {margin:0; font-size: 18px;}
-        .section .sub {color:#475569; font-size: 12.5px; margin-top:2px;}
-
-        @media (prefers-color-scheme: dark){
-            .panel, .card { background:#0B1220; border-color:#1F2937; }
-            .panel h4, .card h4 { color:#CBD5E1; }
-            .card .value { color:#E2E8F0; }
-            .muted { color:#94A3B8; }
-            .ok   { background:#052E2B; }
-            .warn { background:#2B2412; }
-            .bad  { background:#2B1111; }
-        }
-        </style>
+<style>
+.app-container{max-width:1280px;margin:0 auto;}
+section.main>div{padding-top:.25rem;}
+.kpi-grid{display:grid;grid-template-columns:repeat(5,1fr);gap:14px;}
+@media (max-width:1200px){.kpi-grid{grid-template-columns:repeat(3,1fr)}}
+@media (max-width:780px){.kpi-grid{grid-template-columns:repeat(2,1fr)}}
+@media (max-width:520px){.kpi-grid{grid-template-columns:1fr}}
+.metric-grid{display:grid;grid-template-columns:repeat(3,1fr);gap:14px;}
+@media (max-width:900px){.metric-grid{grid-template-columns:1fr}}
+.panel{border:1px solid #E5E7EB;background:#FFF;border-radius:12px;padding:14px 16px;box-shadow:0 2px 6px rgba(15,23,42,.05)}
+.panel h4{margin:0 0 6px 0;font-size:13px;color:#334155;text-transform:uppercase;letter-spacing:.2px}
+.panel .label{font-size:12px;color:#475569;margin-bottom:4px}
+.panel .muted{color:#64748B;font-size:12px;margin-top:4px}
+.card{border:1px solid #E5E7EB;background:#FFF;border-radius:12px;padding:16px 16px 14px;box-shadow:0 2px 6px rgba(15,23,42,.05)}
+.card h4{font-size:12.5px;font-weight:700;letter-spacing:.3px;color:#334155;margin:0 0 6px 0;text-transform:uppercase}
+.card .value{font-variant-numeric:tabular-nums;font-weight:800;font-size:26px;color:#0F172A;margin:0}
+.muted{color:#475569;font-size:12px;margin-top:4px}
+.ok{border-color:#D1FAE5;background:#ECFDF5}
+.warn{border-color:#FEF3C7;background:#FFFBEB}
+.bad{border-color:#FEE2E2;background:#FEF2F2}
+.section{margin-top:18px;margin-bottom:6px}
+.section h3{margin:0;font-size:18px}
+.section .sub{color:#475569;font-size:12.5px;margin-top:2px}
+@media (prefers-color-scheme:dark){
+ .panel,.card{background:#0B1220;border-color:#1F2937}
+ .panel h4,.card h4{color:#CBD5E1}
+ .card .value{color:#E2E8F0}
+ .muted{color:#94A3B8}
+ .ok{background:#052E2B}
+ .warn{background:#2B2412}
+ .bad{background:#2B1111}
+}
+</style>
         """,
-        unsafe_allow_html=True
+        unsafe_allow_html=True,
     )
 
 inject_css()
@@ -105,11 +87,9 @@ def ensure_realizado_df(r, ano: int = 2025) -> pd.DataFrame:
     """
     if isinstance(r, pd.DataFrame):
         df = r.copy()
-        # garantir colunas
         for col in ["FAT", "COMPRAS", "LAT"]:
             if col not in df.columns:
                 df[col] = 0.0
-        # ajustar índice 1..12
         if "yyyymm" in df.columns:
             df["yyyymm"] = pd.to_numeric(df["yyyymm"], errors="coerce").fillna(0).astype(int)
             df["mes"] = df["yyyymm"] % 100
@@ -119,28 +99,23 @@ def ensure_realizado_df(r, ano: int = 2025) -> pd.DataFrame:
             if "yyyymm" not in df.columns:
                 df["yyyymm"] = [ano * 100 + m for m in df.index]
         else:
-            # assume índice já é 1..12
             if "yyyymm" not in df.columns:
                 df["yyyymm"] = [ano * 100 + m for m in df.index]
         return df[["FAT", "COMPRAS", "LAT", "yyyymm"]]
     else:
-        # dict-like
         df = pd.DataFrame.from_dict(r, orient="index")
         df = df.rename_axis("key").reset_index()
         df["key_num"] = pd.to_numeric(df["key"], errors="coerce")
-        # se chave parecer yyyymm (>= 1000)
         if (df["key_num"] >= 1000).any():
             df["yyyymm"] = df["key_num"].astype("Int64")
             df["mes"] = (df["yyyymm"] % 100).astype(int)
         else:
-            # chave é mês 1..12
             df["mes"] = df["key_num"].fillna(0).astype(int)
             df["yyyymm"] = ano * 100 + df["mes"]
         for col in ["FAT", "COMPRAS", "LAT"]:
             if col not in df.columns:
                 df[col] = 0.0
         out = df.set_index("mes").sort_index()[["FAT", "COMPRAS", "LAT", "yyyymm"]]
-        # garantir tipo float
         for col in ["FAT", "COMPRAS", "LAT"]:
             out[col] = pd.to_numeric(out[col], errors="coerce").fillna(0.0).astype(float)
         out["yyyymm"] = out["yyyymm"].astype(int)
@@ -185,7 +160,6 @@ realizado_df = ensure_realizado_df(rpm_raw)    # DataFrame normalizado
 vigente_yyyymm = int(realizado_df.loc[realizado_df["FAT"] > 0, "yyyymm"].max()) if not realizado_df.empty else 0
 mes_vig_num = (vigente_yyyymm % 100) if vigente_yyyymm else 0
 if mes_vig_num == 0:
-    # Sem FAT registrado no ano → usa mês atual
     mes_vig_num = datetime.today().month
     vigente_yyyymm = 2025 * 100 + mes_vig_num
 
@@ -214,10 +188,7 @@ if not realizado_df.empty:
     ytd_fat = float(realizado_df.loc[1:mes_vig_num, "FAT"].sum())
     ytd_compras = float(realizado_df.loc[1:mes_vig_num, "COMPRAS"].sum())
     ytd_lat = float(realizado_df.loc[1:mes_vig_num, "LAT"].sum())
-    # Tributos YTD (apenas mensal + trimestral até mês vigente)
-    pis_ytd = 0.0
-    cof_ytd = 0.0
-    icms_ytd = 0.0
+    pis_ytd = cof_ytd = icms_ytd = 0.0
     lat_dict_ytd = {}
     for m in range(1, mes_vig_num+1):
         l = val_real(m, "LAT")
@@ -234,18 +205,16 @@ if not realizado_df.empty:
             csll_ytd += cs
     ll_ytd = ytd_lat - (pis_ytd + cof_ytd + icms_ytd + irpj_ytd + csll_ytd)
 
-    st.markdown('<div class="kpi-grid">', unsafe_allow_html=True)
-    st.markdown(
-        f"""
-        <div class="card"><h4>Entradas YTD</h4><p class="value">{brl(ytd_compras)}</p></div>
-        <div class="card"><h4>Saídas YTD</h4><p class="value">{brl(ytd_fat)}</p></div>
-        <div class="card"><h4>LAT YTD</h4><p class="value">{brl(ytd_lat)}</p></div>
-        <div class="card {'ok' if ll_ytd>0 else 'warn' if ll_ytd>-50000 else 'bad'}"><h4>Lucro Líquido YTD</h4><p class="value">{brl(ll_ytd)}</p></div>
-        <div class="card"><h4>Mês Vigente</h4><p class="value">{yyyymm_to_label(vigente_yyyymm)}</p></div>
-        """,
-        unsafe_allow_html=True
+    html_kpis = (
+        '<div class="kpi-grid">'
+        f'<div class="card"><h4>Entradas YTD</h4><p class="value">{brl(ytd_compras)}</p></div>'
+        f'<div class="card"><h4>Saídas YTD</h4><p class="value">{brl(ytd_fat)}</p></div>'
+        f'<div class="card"><h4>LAT YTD</h4><p class="value">{brl(ytd_lat)}</p></div>'
+        f'<div class="card {"ok" if ll_ytd>0 else "warn" if ll_ytd>-50000 else "bad"}"><h4>Lucro Líquido YTD</h4><p class="value">{brl(ll_ytd)}</p></div>'
+        f'<div class="card"><h4>Mês Vigente</h4><p class="value">{yyyymm_to_label(vigente_yyyymm)}</p></div>'
+        '</div>'
     )
-    st.markdown('</div>', unsafe_allow_html=True)
+    st.markdown(html_kpis, unsafe_allow_html=True)
 
 # =========================
 # Planejamento LAT – editor por mês (aceita negativos)
@@ -282,7 +251,6 @@ for m in range(1, 13):
                 key=f"lat_input_{ymm}",
             )
             st.session_state["lat_plan"][ymm] = float(val)
-            # Ações locais
             colA, colB = st.columns(2)
             if colA.button("Copiar para os próximos", key=f"copy_next_{ymm}"):
                 base = float(st.session_state["lat_plan"][ymm])
@@ -333,7 +301,7 @@ if mes_selecionado is None:
     mes_selecionado = st.session_state["mes_selecionado"]
 st.session_state["mes_selecionado"] = mes_selecionado
 
-# Determina LAT_total (vigente soma real+sim se permitido)
+# Determina LAT_total
 lat_sim = float(st.session_state["lat_plan"][2025*100 + mes_selecionado])
 lat_real_sel = val_real(mes_selecionado, "LAT")
 fat_real_sel = val_real(mes_selecionado, "FAT")
@@ -353,18 +321,15 @@ else:
 
 with st.expander(f"🎲 {MESES_PT[mes_selecionado]} 2025 - Cenários por margem", expanded=not is_past):
     if is_past:
-        st.markdown('<div class="metric-grid">', unsafe_allow_html=True)
-        st.markdown(
-            f"""
-            <div class="card"><h4>Faturamento (real)</h4><p class="value">{brl(fat_real_sel)}</p></div>
-            <div class="card"><h4>Compras (real)</h4><p class="value">{brl(compras_real_sel)}</p></div>
-            <div class="card"><h4>LAT (real)</h4><p class="value">{brl(lat_real_sel)}</p></div>
-            """,
-            unsafe_allow_html=True
+        html_real = (
+            '<div class="metric-grid">'
+            f'<div class="card"><h4>Faturamento (real)</h4><p class="value">{brl(fat_real_sel)}</p></div>'
+            f'<div class="card"><h4>Compras (real)</h4><p class="value">{brl(compras_real_sel)}</p></div>'
+            f'<div class="card"><h4>LAT (real)</h4><p class="value">{brl(lat_real_sel)}</p></div>'
+            '</div>'
         )
-        st.markdown('</div>', unsafe_allow_html=True)
+        st.markdown(html_real, unsafe_allow_html=True)
     else:
-        # Margem de referência apenas visual
         margem_ref = st.segmented_control(
             "Cenário de referência:",
             options=MARGENS,
@@ -373,7 +338,7 @@ with st.expander(f"🎲 {MESES_PT[mes_selecionado]} 2025 - Cenários por margem"
             key="margem_referencia",
         ) or 0.20
 
-        # Totais e "a emitir" por cada margem r
+        # Totais e "a emitir" por margem r
         cenarios = {}
         for r in MARGENS:
             fat_total = (lat_total / r) if r > 0 else 0.0
@@ -391,48 +356,34 @@ with st.expander(f"🎲 {MESES_PT[mes_selecionado]} 2025 - Cenários por margem"
                 "COMPRA_EMITIR": compras_emitir,
             }
 
-        # Cards da margem de referência
         ref = cenarios[int(margem_ref*100)]
-        st.markdown(f'<div class="section"><h3>Cenário {int(margem_ref*100)}% (Referência)</h3></div>', unsafe_allow_html=True)
-        st.markdown('<div class="metric-grid">', unsafe_allow_html=True)
-        st.markdown(
-            f"""
-            <div class="card">
-                <h4>Faturamento (total do mês)</h4>
-                <p class="value">{brl(ref['FAT_TOTAL'])}</p>
-                {'<div class="muted">Realizado: ' + brl(fat_real_sel) + '</div>' if is_vig else ''}
-                <div class="muted">A emitir: {brl(ref['FAT_EMITIR'])}</div>
-            </div>
-            <div class="card">
-                <h4>Compras (total do mês)</h4>
-                <p class="value">{brl(ref['COMPRA_TOTAL'])}</p>
-                {'<div class="muted">Realizado: ' + brl(compras_real_sel) + '</div>' if is_vig else ''}
-                <div class="muted">A emitir: {brl(ref['COMPRA_EMITIR'])}</div>
-            </div>
-            <div class="card">
-                <h4>LAT do mês</h4>
-                <p class="value">{brl(lat_total)}</p>
-                {"<div class='muted'>Inclui realizado + simulado</div>" if is_vig and sim_vigente else ""}
-            </div>
-            """,
-            unsafe_allow_html=True
+        html_ref = (
+            '<div class="section"><h3>Cenário ' + str(int(margem_ref*100)) + '% (Referência)</h3></div>'
+            '<div class="metric-grid">'
+            f'<div class="card"><h4>Faturamento (total do mês)</h4><p class="value">{brl(ref["FAT_TOTAL"])}</p>'
+            f'{"<div class=\\"muted\\">Realizado: " + brl(fat_real_sel) + "</div>" if is_vig else ""}'
+            f'<div class="muted">A emitir: {brl(ref["FAT_EMITIR"])}</div></div>'
+            f'<div class="card"><h4>Compras (total do mês)</h4><p class="value">{brl(ref["COMPRA_TOTAL"])}</p>'
+            f'{"<div class=\\"muted\\">Realizado: " + brl(compras_real_sel) + "</div>" if is_vig else ""}'
+            f'<div class="muted">A emitir: {brl(ref["COMPRA_EMITIR"])}</div></div>'
+            f'<div class="card"><h4>LAT do mês</h4><p class="value">{brl(lat_total)}</p>'
+            f'{"<div class=\\"muted\\">Inclui realizado + simulado</div>" if is_vig and sim_vigente else ""}'
+            '</div>'
         )
-        st.markdown('</div>', unsafe_allow_html=True)
+        st.markdown(html_ref, unsafe_allow_html=True)
 
-        # PIS/COFINS (sempre base LAT do mês)
+        # PIS/COFINS (base LAT do mês)
         pis_mes, cofins_mes = pis_cofins(lat_total)
-        st.markdown('<div class="section"><h3>Tributos Mensais (Base LAT)</h3></div>', unsafe_allow_html=True)
-        st.markdown('<div class="metric-grid">', unsafe_allow_html=True)
-        st.markdown(
-            f"""
-            <div class="card"><h4>PIS (0,65%)</h4><p class="value">{brl(pis_mes)}</p></div>
-            <div class="card"><h4>COFINS (3%)</h4><p class="value">{brl(cofins_mes)}</p></div>
-            """,
-            unsafe_allow_html=True
+        html_trib = (
+            '<div class="section"><h3>Tributos Mensais (Base LAT)</h3></div>'
+            '<div class="metric-grid">'
+            f'<div class="card"><h4>PIS (0,65%)</h4><p class="value">{brl(pis_mes)}</p></div>'
+            f'<div class="card"><h4>COFINS (3%)</h4><p class="value">{brl(cofins_mes)}</p></div>'
+            '</div>'
         )
-        st.markdown('</div>', unsafe_allow_html=True)
+        st.markdown(html_trib, unsafe_allow_html=True)
 
-        # IRPJ/CSLL somente em Mar/Jun/Set/Dez
+        # IRPJ/CSLL apenas em Mar/Jun/Set/Dez
         if mes_selecionado in [3, 6, 9, 12]:
             lat_anual = {}
             for m in range(1, 13):
@@ -445,31 +396,29 @@ with st.expander(f"🎲 {MESES_PT[mes_selecionado]} 2025 - Cenários por margem"
                     lat_anual[ymm] = st.session_state["lat_plan"][ymm]
             trib = irpj_csll_trimestre(lat_anual)
             irpj_mes, csll_mes = trib.get(2025*100 + mes_selecionado, (0.0, 0.0))
-            st.markdown(
-                f"""
-                <div class="card warn"><h4>IRPJ (Trimestre)</h4><p class="value">{brl(irpj_mes)}</p>
-                <div class="muted">Lançado apenas em Mar/Jun/Set/Dez</div></div>
-                """,
-                unsafe_allow_html=True
+            html_ir = (
+                '<div class="metric-grid">'
+                f'<div class="card warn"><h4>IRPJ (Trimestre)</h4><p class="value">{brl(irpj_mes)}</p>'
+                '<div class="muted">Lançado apenas em Mar/Jun/Set/Dez</div></div>'
+                '</div>'
             )
+            st.markdown(html_ir, unsafe_allow_html=True)
 
-        # Todos os cenários — cards HTML
+        # Todos os Cenários — montar cards sem indentação (evita <div> literal)
         st.markdown('<div class="section"><h3>Todos os Cenários</h3><div class="sub">Totais do mês e valores a emitir por margem</div></div>', unsafe_allow_html=True)
-        cards_html = '<div class="kpi-grid">'
+        cards = []
         for margem_pct in sorted(cenarios.keys()):
             c = cenarios[margem_pct]
             classe_css = "ok" if margem_pct >= 20 else "warn" if margem_pct >= 10 else "bad"
-            cards_html += f"""
-            <div class="card {classe_css}">
-                <h4>Margem {margem_pct}%</h4>
-                <p class="value">{brl(c['FAT_TOTAL'])}</p>
-                <div class="muted">Compras (total): {brl(c['COMPRA_TOTAL'])}</div>
-                <div class="muted">A emitir (Saída): {brl(c['FAT_EMITIR'])}</div>
-                <div class="muted">A emitir (Entrada): {brl(c['COMPRA_EMITIR'])}</div>
-            </div>
-            """
-        cards_html += "</div>"
-        st.markdown(cards_html, unsafe_allow_html=True)
+            cards.append(
+                f'<div class="card {classe_css}"><h4>Margem {margem_pct}%</h4>'
+                f'<p class="value">{brl(c["FAT_TOTAL"])}</p>'
+                f'<div class="muted">Compras (total): {brl(c["COMPRA_TOTAL"])}</div>'
+                f'<div class="muted">A emitir (Saída): {brl(c["FAT_EMITIR"])}</div>'
+                f'<div class="muted">A emitir (Entrada): {brl(c["COMPRA_EMITIR"])}</div>'
+                f'</div>'
+            )
+        st.markdown('<div class="kpi-grid">' + ''.join(cards) + '</div>', unsafe_allow_html=True)
 
 # =========================
 # Exportações (margem 20% como referência visual)
@@ -512,7 +461,6 @@ df_consol = pd.concat([df_consol, tot.to_frame().T], ignore_index=True)
 
 c1, c2 = st.columns(2)
 with c1:
-    # CSV do mês selecionado
     r = 0.20
     lat_t_mes = lat_dict_anual.get(2025*100 + st.session_state["mes_selecionado"], 0.0)
     fat_t_mes = lat_t_mes / r if r > 0 else 0.0
