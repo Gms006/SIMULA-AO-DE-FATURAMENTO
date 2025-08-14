@@ -289,4 +289,212 @@ lat_simulado = st.session_state["tabela"].at[idx_mes, "LAT (R$)"]
 # Para o mês vigente, soma realizado + simulado
 if mes_selecionado == (mes_vig % 100) and sim_vigente and not realizado.empty:
     lat_real = realizado.at[mes_selecionado, "LAT"] if mes_selecionado in realizado.index else 0.0
-    fat_real
+    fat_real = realizado.at[mes_selecionado, "FAT"] if mes_selecionado in realizado.index else 0.0
+    compras_real = realizado.at[mes_selecionado, "COMPRAS"] if mes_selecionado in realizado.index else 0.0
+    
+    # Total do mês = realizado + simulado
+    lat_total = lat_real + lat_simulado
+    
+    st.info(f"**Mês Vigente**: Realizado LAT {brl(lat_real)} + Simulado LAT {brl(lat_simulado)} = **Total LAT {brl(lat_total)}**")
+else:
+    lat_total = lat_simulado
+    fat_real = 0.0
+    compras_real = 0.0
+
+# =========================
+# CENÁRIOS POR MARGEM
+# =========================
+with st.expander(f"🎲 {MESES_PT[mes_selecionado]} {ano} - Cenários", expanded=True):
+    
+    # Seletor de margem de referência
+    margem_ref = st.segmented_control(
+        "Cenário de referência:",
+        options=MARGENS,
+        default=0.20,
+        format_func=lambda x: f"{int(x*100)}%",
+        key="margem_referencia"
+    )
+    
+    # Calcula cenários para o LAT total
+    cenarios = cenarios_fat_compra(lat_total)
+    pis_mes, cofins_mes = pis_cofins(lat_total)
+    
+    # Cards da margem de referência selecionada
+    ref_idx = int(margem_ref * 100)
+    ref_cenario = cenarios[ref_idx]
+    
+    st.markdown(f'<div class="section"><h3>Cenário {int(margem_ref*100)}% (Referência)</h3></div>', unsafe_allow_html=True)
+    
+    st.markdown('<div class="metric-grid">', unsafe_allow_html=True)
+    st.markdown(f'''
+        <div class="card"><h4>Faturamento</h4><p class="value">{brl(ref_cenario["FAT"])}</p>
+        {'<div class="muted">Real: ' + brl(fat_real) + '</div>' if fat_real > 0 else ''}</div>
+        <div class="card"><h4>Compras</h4><p class="value">{brl(ref_cenario["COMPRA"])}</p>
+        {'<div class="muted">Real: ' + brl(compras_real) + '</div>' if compras_real > 0 else ''}</div>
+        <div class="card"><h4>ICMS (5%)</h4><p class="value">{brl(ref_cenario["ICMS"])}</p></div>
+    ''', unsafe_allow_html=True)
+    st.markdown('</div>', unsafe_allow_html=True)
+    
+    # Tributos fixos sobre LAT
+    st.markdown('<div class="section"><h3>Tributos Mensais (Base LAT)</h3></div>', unsafe_allow_html=True)
+    
+    st.markdown('<div class="metric-grid">', unsafe_allow_html=True)
+    st.markdown(f'''
+        <div class="card"><h4>PIS (0,65%)</h4><p class="value">{brl(pis_mes)}</p></div>
+        <div class="card"><h4>COFINS (3%)</h4><p class="value">{brl(cofins_mes)}</p></div>
+    ''', unsafe_allow_html=True)
+    
+    # IRPJ/CSLL apenas nos meses de fechamento trimestral
+    if mes_selecionado in [3, 6, 9, 12]:  # Mar, Jun, Set, Dez
+        # Constrói LAT de todo o ano para cálculo trimestral
+        lat_anual = {}
+        for i in range(12):
+            mes_num = i + 1
+            yyyymm = 2025 * 100 + mes_num
+            
+            if mes_num <= (mes_vig % 100) and not sim_vigente:
+                # Mês já realizado
+                lat_anual[yyyymm] = st.session_state["valores_realizados"].get(mes_num, 0.0)
+            elif mes_num == (mes_vig % 100) and sim_vigente:
+                # Mês vigente: realizado + simulado
+                lat_r = st.session_state["valores_realizados"].get(mes_num, 0.0)
+                lat_s = st.session_state["tabela"].at[i, "LAT (R$)"]
+                lat_anual[yyyymm] = lat_r + lat_s
+            else:
+                # Mês futuro: apenas simulado
+                lat_anual[yyyymm] = st.session_state["tabela"].at[i, "LAT (R$)"]
+        
+        # Calcula IRPJ/CSLL do trimestre
+        tributos_tri = irpj_csll_trimestre(lat_anual)
+        irpj_mes, csll_mes = tributos_tri.get(2025 * 100 + mes_selecionado, (0.0, 0.0))
+        
+        st.markdown(f'''
+            <div class="card warn"><h4>IRPJ (Trimestre)</h4><p class="value">{brl(irpj_mes)}</p>
+            <div class="muted">Fechamento trimestral</div></div>
+        ''', unsafe_allow_html=True)
+    
+    st.markdown('</div>', unsafe_allow_html=True)
+    
+    # Resumo de todos os cenários
+    st.markdown('<div class="section"><h3>Todos os Cenários</h3><div class="sub">Variação de FAT e Compras por margem</div></div>', unsafe_allow_html=True)
+    
+    cenarios_html = '<div class="kpi-grid">'
+    for margem_pct in sorted(cenarios.keys()):
+        cen = cenarios[margem_pct]
+        classe_css = "ok" if margem_pct >= 20 else "warn" if margem_pct >= 10 else "bad"
+        cenarios_html += f'''
+            <div class="card {classe_css}">
+                <h4>Margem {margem_pct}%</h4>
+                <p class="value">{brl(cen["FAT"])}</p>
+                <div class="muted">Compras: {brl(cen["COMPRA"])}</div>
+            </div>
+        '''
+    cenarios_html += '</div>'
+    
+    st.markdown(cenarios_html, unsafe_allow_html=True)
+
+# =========================
+# EXPORTAÇÃO
+# =========================
+st.markdown("---")
+
+# Prepara dados para exportação
+lat_dict_anual = {}
+for i in range(12):
+    mes_num = i + 1
+    yyyymm = 2025 * 100 + mes_num
+    
+    if mes_num <= (mes_vig % 100) and not sim_vigente:
+        # Realizado
+        lat_dict_anual[yyyymm] = st.session_state["valores_realizados"].get(mes_num, 0.0)
+    elif mes_num == (mes_vig % 100) and sim_vigente:
+        # Vigente: real + simulado
+        lat_r = st.session_state["valores_realizados"].get(mes_num, 0.0)
+        lat_s = st.session_state["tabela"].at[i, "LAT (R$)"]
+        lat_dict_anual[yyyymm] = lat_r + lat_s
+    else:
+        # Futuro: simulado
+        lat_dict_anual[yyyymm] = st.session_state["tabela"].at[i, "LAT (R$)"]
+
+# Calcula IRPJ/CSLL anuais
+tributos_anuais = irpj_csll_trimestre(lat_dict_anual)
+
+# Monta DataFrame consolidado (margem 20% como padrão)
+rows_consolidado = []
+for mes_num in range(1, 13):
+    yyyymm = 2025 * 100 + mes_num
+    lat = lat_dict_anual.get(yyyymm, 0.0)
+    
+    # Cenários com margem 20%
+    if lat > 0:
+        fat = lat / 0.20
+        compras = fat - lat
+        icms = 0.05 * fat
+    else:
+        fat = compras = icms = 0.0
+    
+    # Tributos
+    pis = 0.0065 * lat
+    cofins = 0.03 * lat
+    irpj, csll = tributos_anuais.get(yyyymm, (0.0, 0.0))
+    
+    lucro_liquido = lat - (pis + cofins + icms + irpj + csll)
+    
+    rows_consolidado.append({
+        "Mês": MESES_PT[mes_num],
+        "LAT": lat,
+        "Faturamento": fat,
+        "Compras": compras,
+        "ICMS": icms,
+        "PIS": pis,
+        "COFINS": cofins,
+        "IRPJ": irpj,
+        "CSLL": csll,
+        "Lucro Líquido": lucro_liquido,
+    })
+
+df_consolidado = pd.DataFrame(rows_consolidado)
+
+# Adiciona linha de totais
+totals = df_consolidado.sum(numeric_only=True)
+totals["Mês"] = "TOTAL"
+df_consolidado = pd.concat([df_consolidado, totals.to_frame().T], ignore_index=True)
+
+col1, col2 = st.columns(2)
+
+with col1:
+    # Download do mês selecionado
+    df_mes_sel = pd.DataFrame([{
+        "Mês": MESES_PT[mes_selecionado],
+        "LAT": lat_total,
+        "Cenários": f"Margem 20%: FAT {brl(ref_cenario['FAT'])}, Compras {brl(ref_cenario['COMPRA'])}",
+        "PIS": pis_mes,
+        "COFINS": cofins_mes,
+    }])
+    
+    csv_mes = df_mes_sel.to_csv(index=False).encode("utf-8")
+    st.download_button(
+        f"📄 Baixar {MESES_PT[mes_selecionado]} CSV",
+        csv_mes,
+        file_name=f"simulacao_{MESES_PT[mes_selecionado].lower()}_2025.csv",
+        mime="text/csv"
+    )
+
+with col2:
+    # Download consolidado anual
+    st.download_button(
+        "📊 Baixar Consolidado Anual XLSX",
+        to_excel(df_consolidado),
+        file_name="simulacao_anual_2025.xlsx",
+        mime="application/vnd.openxmlformats-officedocument.spreadsheetml.sheet"
+    )
+
+# Exibe preview do consolidado
+with st.expander("👁️ Preview Consolidado Anual", expanded=False):
+    # Formatar para exibição
+    df_preview = df_consolidado.copy()
+    cols_money = ["LAT", "Faturamento", "Compras", "ICMS", "PIS", "COFINS", "IRPJ", "CSLL", "Lucro Líquido"]
+    for col in cols_money:
+        df_preview[col] = df_preview[col].apply(lambda x: brl(x) if pd.notnull(x) else "—")
+    
+    st.dataframe(df_preview, use_container_width=True, hide_index=True)
