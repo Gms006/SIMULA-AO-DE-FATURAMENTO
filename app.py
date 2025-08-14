@@ -278,4 +278,4 @@ if pagina == "Simulação":
         col2.metric(f"CSLL – {MESES_PT[fechamento % 100]} (trimestre)", fmt_brl(csll))
     else:
         col1.metric("IRPJ – trimestre", fmt_brl(0.0))
-        col2.metric("CSLL – trimestre",
+        col2.metric("CSLL – trimestre", fmt_brl(0.0))
