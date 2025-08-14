@@ -1,5 +1,5 @@
 from __future__ import annotations
-from typing import Dict, Sequence, Optional
+from typing import Dict, Sequence, Optional, Tuple, List
 import pandas as pd
 import numpy as np
 
@@ -115,87 +115,87 @@ def compute_realizado(df: pd.DataFrame) -> pd.DataFrame:
     mensal["yyyymm"] = [202500 + i for i in range(1, 13)]
     return mensal
 
-def simulate(
-    realizado: pd.DataFrame,
-    lat_meta_anual: float,
-    margins: Sequence[float],
-    months_to_simulate: Sequence[int],
-    distribution: Optional[Dict[int, float]] = None,
-) -> Dict[float, pd.DataFrame]:
-    """Simula meses futuros para atingir LAT anual."""
-    meses_sim = list(months_to_simulate)
-    locked = set(range(1, 13)) - set(meses_sim)
-    lat_realizado = realizado.loc[sorted(locked), "LAT"].sum()
-    lat_restante = max(lat_meta_anual - lat_realizado, 0.0)
-    if distribution is None:
-        distribution = {m: 1 / len(meses_sim) for m in meses_sim}
-    else:
-        total = sum(distribution.values())
-        distribution = {m: distribution.get(m, 0) / total for m in meses_sim}
-    resultados: Dict[float, pd.DataFrame] = {}
-    for margem in margins:
-        df = realizado.copy()
-        for mes in meses_sim:
-            lat_mes = lat_restante * distribution[mes]
-            fat = lat_mes / margem if margem else 0.0
-            cmv = fat - lat_mes
-            df.loc[mes, "FAT"] = fat
-            df.loc[mes, "CMV"] = cmv
-            df.loc[mes, "CONSUMO"] = 0.0
-            df.loc[mes, "LB"] = fat - cmv
-            df.loc[mes, "LAT"] = lat_mes
-            df.loc[mes, "PIS"] = 0.0065 * lat_mes
-            df.loc[mes, "COFINS"] = 0.03 * lat_mes
-            df.loc[mes, "ICMS"] = 0.05 * fat
-            df.loc[mes, ["IRPJ", "CSLL"]] = 0.0
-        df = apurar_irpj_csll_trimestral(df, locked_months=locked)
-        df["LL"] = df["LAT"] - (df["PIS"] + df["COFINS"] + df["ICMS"] + df["IRPJ"] + df["CSLL"])
-        df["Compras"] = df["CMV"]
-        resultados[margem] = df
-    return resultados
+
+def calc_mes(lat: float) -> Dict[str, Dict]:
+    """Calcula tributos e cenários de faturamento para um LAT mensal."""
+    pis = 0.0065 * lat
+    cofins = 0.03 * lat
+    margens = [0.05, 0.10, 0.15, 0.20, 0.25, 0.30]
+    cenarios: Dict[float, Dict[str, float]] = {}
+    for m in margens:
+        fat = lat / m if m else 0.0
+        compras = fat - lat
+        icms = 0.05 * fat
+        cenarios[m] = {"FAT": fat, "COMPRAS": compras, "ICMS": icms}
+    return {"PIS": pis, "COFINS": cofins, "cenarios": cenarios}
+
+
+def irpj_csll_trimestre(lat_por_mes: Dict[int, float], tri_key: str) -> Tuple[float, float, int]:
+    """Retorna IRPJ, CSLL totais do trimestre e mês de fechamento."""
+    ano = int(tri_key[:4])
+    tri = int(tri_key[-1])
+    mapa = {1: [1, 2, 3], 2: [4, 5, 6], 3: [7, 8, 9], 4: [10, 11, 12]}
+    meses = [ano * 100 + m for m in mapa[tri]]
+    bases = [0.32 * lat_por_mes.get(m, 0.0) for m in meses]
+    base_total = sum(bases)
+    irpj = 0.15 * base_total
+    if base_total > 60000:
+        irpj += 0.10 * (base_total - 60000)
+    csll = 0.09 * base_total
+    fechamento = meses[-1]
+    return irpj, csll, fechamento
+
+
+def ultimo_yyyymm(df: pd.DataFrame) -> int:
+    """Retorna o último yyyymm encontrado no DataFrame."""
+    if "yyyymm" in df.columns and not df["yyyymm"].dropna().empty:
+        return int(df["yyyymm"].dropna().astype(int).max())
+    return 0
+
+
+def meses_simulaveis(ultimo: int) -> List[int]:
+    """Lista meses yyyymm posteriores ao último mês realizado."""
+    return [m for m in range(202501, 202513) if m > ultimo]
+
+
+def trimestre_de(mes: int) -> str:
+    """Retorna a chave do trimestre (YYYYQn) para um yyyymm."""
+    q = ((mes % 100 - 1) // 3) + 1
+    return f"{mes // 100}Q{q}"
+
+
+def progresso_trimestre(lat_por_mes: Dict[int, float], tri_key: str) -> Tuple[int, int, List[int]]:
+    """Avalia o progresso do trimestre: meses preenchidos e faltantes."""
+    ano = int(tri_key[:4])
+    tri = int(tri_key[-1])
+    mapa = {1: [1, 2, 3], 2: [4, 5, 6], 3: [7, 8, 9], 4: [10, 11, 12]}
+    meses = [ano * 100 + m for m in mapa[tri]]
+    preenchidos = [m for m in meses if lat_por_mes.get(m, 0.0) > 0]
+    faltantes = [m for m in meses if lat_por_mes.get(m, 0.0) <= 0]
+    return len(preenchidos), len(meses), faltantes
 
 if __name__ == "__main__":
     # Cenário 1
-    df1 = pd.DataFrame(
-        {
-            "Data Emissão": ["01/01/2025", "01/01/2025"],
-            "Valor Total": ["200000,00", "100000,00"],
-            "Tipo Nota": ["Saída", "Entrada"],
-            "Classificação": ["", "MERCADORIA PARA REVENDA"],
-            "Natureza Operação": ["Venda", "Compra"],
-        }
-    )
-    real = compute_realizado(df1)
-    assert round(real.at[1, "PIS"], 2) == 650.00
-    assert round(real.at[1, "COFINS"], 2) == 3000.00
-    assert round(real.at[1, "ICMS"], 2) == 10000.00
+    res = calc_mes(100000.0)
+    assert round(res["PIS"], 2) == 650.00
+    assert round(res["COFINS"], 2) == 3000.00
+    cen20 = res["cenarios"][0.20]
+    assert round(cen20["FAT"], 2) == 500000.00
+    assert round(cen20["COMPRAS"], 2) == 400000.00
+    assert round(cen20["ICMS"], 2) == 25000.00
 
     # Cenário 2
-    tri = pd.DataFrame(index=[1, 2, 3], data={"LAT": [83333.33, 83333.33, 83333.34]})
-    tri = apurar_irpj_csll_trimestral(tri)
-    assert round(tri["IRPJ"].sum(), 2) == 14000.00
-    assert round(tri["CSLL"].sum(), 2) == 7200.00
+    lat_mes = {202501: 83333.33, 202502: 83333.33, 202503: 83333.34}
+    irpj, csll, fechamento = irpj_csll_trimestre(lat_mes, "2025Q1")
+    assert round(irpj, 2) == 14000.00
+    assert round(csll, 2) == 7200.00
+    assert fechamento == 202503
 
     # Cenário 3
-    vazio = pd.DataFrame(
-        index=range(1, 13),
-        columns=[
-            "FAT",
-            "CMV",
-            "CONSUMO",
-            "LB",
-            "LAT",
-            "PIS",
-            "COFINS",
-            "ICMS",
-            "IRPJ",
-            "CSLL",
-            "LL",
-            "Compras",
-        ],
-        data=0.0,
-    )
-    sim = simulate(vazio, 50000.0, [0.20], [1])[0.20]
-    assert round(sim.at[1, "FAT"], 2) == 250000.00
-    assert round(sim.at[1, "CMV"], 2) == 200000.00
+    prog0 = progresso_trimestre({}, "2025Q1")
+    assert prog0[0] == 0
+    prog2 = progresso_trimestre({202501: 1000.0, 202502: 1000.0}, "2025Q1")
+    assert prog2[0] == 2
+    prog3 = progresso_trimestre(lat_mes, "2025Q1")
+    assert prog3[0] == 3
     print("Testes rápidos OK!")

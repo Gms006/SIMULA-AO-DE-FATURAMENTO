@@ -1,36 +1,32 @@
 import os
 import sys
-import pandas as pd
 import pytest
 
 sys.path.append(os.path.dirname(os.path.dirname(__file__)))
-from calc import compute_realizado, apurar_irpj_csll_trimestral, simulate
+from calc import calc_mes, irpj_csll_trimestre, progresso_trimestre
 
-def test_pis_cofins_icms():
-    df = pd.DataFrame({
-        "Data Emissão": ["01/01/2025", "01/01/2025"],
-        "Valor Total": ["200000,00", "100000,00"],
-        "Tipo Nota": ["Saída", "Entrada"],
-        "Classificação": ["", "MERCADORIA PARA REVENDA"],
-        "Natureza Operação": ["Venda", "Compra"],
-    })
-    mensal = compute_realizado(df)
-    assert mensal.at[1, "PIS"] == pytest.approx(650.0)
-    assert mensal.at[1, "COFINS"] == pytest.approx(3000.0)
-    assert mensal.at[1, "ICMS"] == pytest.approx(10000.0)
 
-def test_irpj_csll_rateio():
-    tri = pd.DataFrame(index=[1,2,3], data={"LAT":[83333.33,83333.33,83333.34]})
-    tri = apurar_irpj_csll_trimestral(tri)
-    assert tri["IRPJ"].sum() == pytest.approx(14000.0)
-    assert tri["CSLL"].sum() == pytest.approx(7200.0)
+def test_calc_mes_basico():
+    res = calc_mes(100000.0)
+    assert res["PIS"] == pytest.approx(650.0)
+    assert res["COFINS"] == pytest.approx(3000.0)
+    cen = res["cenarios"][0.20]
+    assert cen["FAT"] == pytest.approx(500000.0)
+    assert cen["COMPRAS"] == pytest.approx(400000.0)
+    assert cen["ICMS"] == pytest.approx(25000.0)
 
-def test_simulation_margin():
-    vazio = pd.DataFrame(
-        index=range(1,13),
-        columns=["FAT","CMV","CONSUMO","LB","LAT","PIS","COFINS","ICMS","IRPJ","CSLL","LL","Compras"],
-        data=0.0,
-    )
-    sim = simulate(vazio, 50000.0, [0.20], [1])[0.20]
-    assert sim.at[1, "FAT"] == pytest.approx(250000.0)
-    assert sim.at[1, "CMV"] == pytest.approx(200000.0)
+
+def test_irpj_csll_trimestre():
+    lat = {202501: 83333.33, 202502: 83333.33, 202503: 83333.34}
+    irpj, csll, fechamento = irpj_csll_trimestre(lat, "2025Q1")
+    assert irpj == pytest.approx(14000.0)
+    assert csll == pytest.approx(7200.0)
+    assert fechamento == 202503
+
+
+def test_progresso_trimestre():
+    lat = {202501: 1000.0, 202502: 0.0, 202503: 1000.0}
+    prog, total, falt = progresso_trimestre(lat, "2025Q1")
+    assert total == 3
+    assert prog == 2
+    assert falt == [202502]
