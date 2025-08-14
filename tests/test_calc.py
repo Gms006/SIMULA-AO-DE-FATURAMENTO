@@ -1,41 +1,49 @@
 import os
 import sys
+import pandas as pd
+import streamlit as st
 import pytest
 
 sys.path.insert(0, os.path.dirname(os.path.dirname(os.path.abspath(__file__))))
-from calc import parse_brl, cenarios_por_margem, irpj_csll_trimestre
+from ui_helpers import cenarios_fat_compra, pis_cofins
+from calc import irpj_csll_trimestre
 
 
-def test_parse_brl():
-    assert parse_brl("1.234.567,89") == pytest.approx(1234567.89)
+def test_number_column_format_and_dtype():
+    df = pd.DataFrame({"LAT (R$)": pd.Series([None]*12, dtype="float")})
+    st.column_config.NumberColumn("LAT (R$)", format="R$ %.2f", step=100.0, min_value=0.0)
+    assert str(df["LAT (R$)"].dtype) == "float64"
 
 
-def test_vigente_total_real_sim():
-    real = 1000.0
-    sim = 500.0
-    total = real + sim
-    cen = cenarios_por_margem(total)
-    assert cen[20]["FAT"] == pytest.approx(total / 0.20)
+def test_cenarios_fat_compra_margem_20():
+    res = cenarios_fat_compra(389_800)
+    assert res[20]["FAT"] == pytest.approx(1_949_000)
+    assert res[20]["COMPRA"] == pytest.approx(1_559_200)
+    assert res[20]["ICMS"] == pytest.approx(97_450)
 
-class TestCalc(unittest.TestCase):
-    def test_margem_20(self):
-        res = calc_por_margem(100000.0, 0.20)
-        self.assertAlmostEqual(res["FAT"], 500000.0, places=2)
-        self.assertAlmostEqual(res["COMPRAS"], 400000.0, places=2)
-        self.assertAlmostEqual(res["ICMS"], 25000.0, places=2)
 
-def test_margem_20():
-    res = cenarios_por_margem(100000.0)
-    assert res[20]["FAT"] == pytest.approx(500000.0)
-    assert res[20]["COMPRAS"] == pytest.approx(400000.0)
-    assert res[20]["ICMS"] == pytest.approx(25000.0)
+def test_vigente_soma_real_simulado():
+    lat_real = 10_000.0
+    lat_sim = 5_000.0
+    lat_total = lat_real + lat_sim
+    pis, cofins = pis_cofins(lat_total)
+    assert pis == pytest.approx(0.0065 * lat_total)
+    assert cofins == pytest.approx(0.03 * lat_total)
+
+    lat_dict = {202501: lat_real, 202502: lat_total, 202503: 0.0}
+    trib = irpj_csll_trimestre(lat_dict)
+    base = 0.32 * (lat_real + lat_total + 0.0)
+    assert trib[202503][0] == pytest.approx(0.15 * base)
+    assert trib[202503][1] == pytest.approx(0.09 * base)
 
 
 def test_irpj_csll_trimestre_adicional():
-    lat_mes = {202501: 100000.0, 202502: 100000.0, 202503: 100000.0}
+    lat_mes = {202501: 100_000.0, 202502: 100_000.0, 202503: 100_000.0}
     trib = irpj_csll_trimestre(lat_mes)
-    assert 202503 in trib
+    assert 202503 in trib and 202502 not in trib
     irpj, csll = trib[202503]
-    assert irpj == pytest.approx(18000.0)
-    assert csll == pytest.approx(8640.0)
-    assert 202502 not in trib
+    base_total = 0.32 * (300_000.0)
+    expected_irpj = 0.15 * base_total + 0.10 * (base_total - 60_000)
+    expected_csll = 0.09 * base_total
+    assert irpj == pytest.approx(expected_irpj)
+    assert csll == pytest.approx(expected_csll)

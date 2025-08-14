@@ -3,6 +3,7 @@ from typing import Dict, Sequence, Optional, Tuple, List
 import pandas as pd
 import numpy as np
 from datetime import datetime
+import unicodedata
 
 # Margens padrão utilizadas no app
 MARGENS: List[float] = [0.05, 0.10, 0.15, 0.20, 0.25, 0.30]
@@ -18,11 +19,11 @@ def parse_brl(valor_str: str) -> float:
     except (ValueError, AttributeError):
         return 0.0
 
-def normalize_tipo_nota(tipo: str) -> str:
-    """Normaliza tipo de nota removendo acentos e padronizando case."""
-    if pd.isna(tipo):
+def normalize_str(text: str) -> str:
+    """Remove acentos e converte para maiúsculas."""
+    if pd.isna(text):
         return ""
-    return str(tipo).strip().lower().replace("saída", "saida")
+    return unicodedata.normalize("NFKD", str(text)).encode("ascii", "ignore").decode("ascii").upper().strip()
 
 def yyyy_mm(df: pd.DataFrame) -> pd.DataFrame:
     """Adiciona coluna yyyymm padronizada ao DataFrame."""
@@ -39,19 +40,23 @@ def realizado_por_mes(df: pd.DataFrame) -> pd.DataFrame:
     df = df[df["ano"] == 2025]
     
     # Máscaras para diferentes tipos de operação
-    mask_devol = df["natureza_operacao"].str.contains("devolucao de compra", case=False, na=False)
-    mask_saida = df["tipo_nota"] == "saida"
-    mask_entrada = df["tipo_nota"] == "entrada"
-    mask_compras = mask_entrada & (df["classificacao"] == "mercadoria para revenda")
+    mask_devol = df["natureza_operacao"].str.contains("DEVOLUCAO DE COMPRA", na=False)
+    mask_saida = df["tipo_nota"] == "SAIDA"
+    mask_entrada = df["tipo_nota"] == "ENTRADA"
+    mask_compras = mask_entrada & (df["classificacao"] == "MERCADORIA PARA REVENDA")
     
     # Consolida por mês
     mensal = pd.DataFrame(index=range(1, 13), columns=["FAT", "COMPRAS", "LAT"], data=0.0)
     
     # FAT = saídas (exceto devoluções)
-    mensal["FAT"] = df[mask_saida & ~mask_devol].groupby("mes")["valor_total"].sum()
-    
+    mensal["FAT"] = (
+        df[mask_saida & ~mask_devol].groupby("mes")["valor_total"].sum().reindex(mensal.index, fill_value=0)
+    )
+
     # COMPRAS = entradas de mercadoria - devoluções
-    mensal["COMPRAS"] = df[mask_compras].groupby("mes")["valor_total"].sum()
+    mensal["COMPRAS"] = (
+        df[mask_compras].groupby("mes")["valor_total"].sum().reindex(mensal.index, fill_value=0)
+    )
     mensal["COMPRAS"] -= df[mask_devol].groupby("mes")["valor_total"].sum().reindex(mensal.index, fill_value=0)
     
     mensal = mensal.fillna(0.0)
@@ -231,8 +236,8 @@ def prepare_dataframe(df: pd.DataFrame) -> pd.DataFrame:
     
     # Normalização de datas e tipos
     df = yyyy_mm(df)
-    df["tipo_nota"] = df["tipo_nota"].apply(normalize_tipo_nota)
-    df["classificacao"] = df["classificacao"].astype(str).str.strip().str.lower()
-    df["natureza_operacao"] = df["natureza_operacao"].astype(str).str.strip().str.lower()
+    df["tipo_nota"] = df["tipo_nota"].apply(normalize_str)
+    df["classificacao"] = df["classificacao"].apply(normalize_str)
+    df["natureza_operacao"] = df["natureza_operacao"].apply(normalize_str)
     
     return df

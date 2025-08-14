@@ -192,7 +192,7 @@ if "tabela" not in st.session_state:
     # Cria tabela inicial
     st.session_state["tabela"] = pd.DataFrame({
         "Mês": [MESES_PT[i] for i in range(1, 13)],
-        "LAT (R$)": [0.0] * 12,
+        "LAT (R$)": pd.Series([None] * 12, dtype="float"),
         "Obs": [""] * 12,
     })
     
@@ -242,10 +242,10 @@ df_editado = st.data_editor(
     column_config={
         "Mês": st.column_config.TextColumn("Mês", disabled=True, width="small"),
         "LAT (R$)": st.column_config.NumberColumn(
-            "LAT (R$)", 
-            min_value=0.0, 
-            step=1000.0, 
-            format="R$ %.2f",  # Formato seguro sem sprintf
+            "LAT (R$)",
+            min_value=0.0,
+            step=100.0,
+            format="R$ %.2f",
             width="medium"
         ),
         "Obs": st.column_config.TextColumn("Obs", width="large"),
@@ -284,7 +284,8 @@ st.session_state["mes_selecionado"] = mes_selecionado
 # CÁLCULOS DO MÊS SELECIONADO
 # =========================
 idx_mes = mes_selecionado - 1
-lat_simulado = st.session_state["tabela"].at[idx_mes, "LAT (R$)"]
+lat_val = st.session_state["tabela"].at[idx_mes, "LAT (R$)"]
+lat_simulado = float(lat_val) if pd.notna(lat_val) else 0.0
 
 # Para o mês vigente, soma realizado + simulado
 if mes_selecionado == (mes_vig % 100) and sim_vigente and not realizado.empty:
@@ -358,11 +359,13 @@ with st.expander(f"🎲 {MESES_PT[mes_selecionado]} {ano} - Cenários", expanded
             elif mes_num == (mes_vig % 100) and sim_vigente:
                 # Mês vigente: realizado + simulado
                 lat_r = st.session_state["valores_realizados"].get(mes_num, 0.0)
-                lat_s = st.session_state["tabela"].at[i, "LAT (R$)"]
+                lat_val2 = st.session_state["tabela"].at[i, "LAT (R$)"]
+                lat_s = float(lat_val2) if pd.notna(lat_val2) else 0.0
                 lat_anual[yyyymm] = lat_r + lat_s
             else:
                 # Mês futuro: apenas simulado
-                lat_anual[yyyymm] = st.session_state["tabela"].at[i, "LAT (R$)"]
+                val_fut = st.session_state["tabela"].at[i, "LAT (R$)"]
+                lat_anual[yyyymm] = float(val_fut) if pd.notna(val_fut) else 0.0
         
         # Calcula IRPJ/CSLL do trimestre
         tributos_tri = irpj_csll_trimestre(lat_anual)
@@ -410,11 +413,13 @@ for i in range(12):
     elif mes_num == (mes_vig % 100) and sim_vigente:
         # Vigente: real + simulado
         lat_r = st.session_state["valores_realizados"].get(mes_num, 0.0)
-        lat_s = st.session_state["tabela"].at[i, "LAT (R$)"]
+        lat_val3 = st.session_state["tabela"].at[i, "LAT (R$)"]
+        lat_s = float(lat_val3) if pd.notna(lat_val3) else 0.0
         lat_dict_anual[yyyymm] = lat_r + lat_s
     else:
         # Futuro: simulado
-        lat_dict_anual[yyyymm] = st.session_state["tabela"].at[i, "LAT (R$)"]
+        val_future = st.session_state["tabela"].at[i, "LAT (R$)"]
+        lat_dict_anual[yyyymm] = float(val_future) if pd.notna(val_future) else 0.0
 
 # Calcula IRPJ/CSLL anuais
 tributos_anuais = irpj_csll_trimestre(lat_dict_anual)
