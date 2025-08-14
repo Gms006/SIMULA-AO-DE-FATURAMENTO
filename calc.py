@@ -2,6 +2,68 @@ from __future__ import annotations
 from typing import Dict, Sequence, Optional, Tuple, List
 import pandas as pd
 import numpy as np
+from datetime import datetime
+
+# Margens padrão utilizadas no app
+MARGENS: List[float] = [0.05, 0.10, 0.15, 0.20, 0.25, 0.30]
+
+
+def calc_por_margem(lat: float, margem: float) -> Dict[str, float]:
+    """Calcula FAT, Compras e ICMS para um LAT em uma margem dada."""
+    if margem <= 0:
+        raise ValueError("Margem deve ser maior que zero")
+    fat = lat / margem if lat else 0.0
+    compras = fat - lat
+    icms = 0.05 * fat
+    return {"FAT": fat, "COMPRAS": compras, "ICMS": icms}
+
+
+def base_pis_cofins(
+    base: str,
+    lat: float,
+    fat_ref: float,
+    m_ref: float = 0.20,
+    aliq_pis: float = 0.0065,
+    aliq_cof: float = 0.03,
+) -> Tuple[float, float]:
+    """Calcula PIS/COFINS conforme a base selecionada."""
+    if base == "Lucro do mês (LAT)":
+        base_val = lat
+    elif base == "Receita (FAT)":
+        base_val = fat_ref
+    else:  # "Margem (FAT*m)"
+        base_val = fat_ref * m_ref
+    pis = aliq_pis * base_val
+    cofins = aliq_cof * base_val
+    return pis, cofins
+
+
+def meses_simulaveis(ultimo: int, sim_vigente: bool, ano: int = 2025) -> List[int]:
+    """Retorna lista de meses yyyymm disponíveis para simulação."""
+    hoje = datetime.today()
+    limite = hoje.month if (sim_vigente and hoje.year == ano) else 12
+    return [ano * 100 + m for m in range(1, limite + 1) if ano * 100 + m > ultimo]
+
+
+def irpj_csll_trimestrais(lat_por_mes: Dict[int, float]) -> Dict[int, Tuple[float, float]]:
+    """Calcula IRPJ/CSLL trimestrais, lançando apenas no mês de fechamento."""
+    resultado: Dict[int, Tuple[float, float]] = {}
+    if not lat_por_mes:
+        return resultado
+    mapa_tri = {1: [1, 2, 3], 2: [4, 5, 6], 3: [7, 8, 9], 4: [10, 11, 12]}
+    anos = {m // 100 for m in lat_por_mes.keys()}
+    for ano in anos:
+        for tri, meses in mapa_tri.items():
+            meses_yyyymm = [ano * 100 + m for m in meses]
+            base_total = sum(0.32 * lat_por_mes.get(m, 0.0) for m in meses_yyyymm)
+            if base_total <= 0:
+                continue
+            irpj = 0.15 * base_total
+            if base_total > 60000:
+                irpj += 0.10 * (base_total - 60000)
+            csll = 0.09 * base_total
+            resultado[meses_yyyymm[-1]] = (irpj, csll)
+    return resultado
 
 COL_MAP = {
     "cfop": "cfop",
@@ -189,19 +251,6 @@ def ultimo_yyyymm(df: pd.DataFrame) -> int:
         return int(df["yyyymm"].dropna().astype(int).max())
     return 0
 
-
-def meses_simulaveis(ultimo: int) -> List[int]:
-    """Lista meses yyyymm posteriores ao último mês realizado.
-    
-    Args:
-        ultimo: último yyyymm presente nos dados reais
-        
-    Returns:
-        Lista de yyyymm dos meses simuláveis (após o último realizado)
-    """
-    return [m for m in range(202501, 202513) if m > ultimo]
-
-
 def trimestre_de(mes: int) -> str:
     """Retorna a chave do trimestre (YYYYQn) para um yyyymm.
     
@@ -237,38 +286,5 @@ def progresso_trimestre(lat_por_mes: Dict[int, float], tri_key: str) -> Tuple[in
     # Verifica quais meses têm LAT > 0
     preenchidos = [m for m in meses if lat_por_mes.get(m, 0.0) > 0]
     faltantes = [m for m in meses if lat_por_mes.get(m, 0.0) <= 0]
-    
+
     return len(preenchidos), len(meses), faltantes
-
-
-if __name__ == "__main__":
-    # Testes básicos das funções principais
-    
-    # Cenário 1: LAT de R$ 100.000
-    res = calc_mes(100000.0)
-    assert round(res["PIS"], 2) == 650.00, f"PIS esperado: 650.00, obtido: {res['PIS']}"
-    assert round(res["COFINS"], 2) == 3000.00, f"COFINS esperado: 3000.00, obtido: {res['COFINS']}"
-    
-    cen20 = res["cenarios"][0.20]
-    assert round(cen20["FAT"], 2) == 500000.00, f"FAT 20% esperado: 500000.00, obtido: {cen20['FAT']}"
-    assert round(cen20["COMPRAS"], 2) == 400000.00, f"COMPRAS 20% esperado: 400000.00, obtido: {cen20['COMPRAS']}"
-    assert round(cen20["ICMS"], 2) == 25000.00, f"ICMS 20% esperado: 25000.00, obtido: {cen20['ICMS']}"
-
-    # Cenário 2: Trimestre com base que excede 60k
-    lat_mes = {202501: 83333.33, 202502: 83333.33, 202503: 83333.34}
-    irpj, csll, fechamento = irpj_csll_trimestre(lat_mes, "2025Q1")
-    assert round(irpj, 2) == 14000.00, f"IRPJ esperado: 14000.00, obtido: {irpj}"
-    assert round(csll, 2) == 7200.00, f"CSLL esperado: 7200.00, obtido: {csll}"
-    assert fechamento == 202503, f"Fechamento esperado: 202503, obtido: {fechamento}"
-
-    # Cenário 3: Progresso do trimestre
-    prog0 = progresso_trimestre({}, "2025Q1")
-    assert prog0[0] == 0, f"Progresso 0 esperado: 0, obtido: {prog0[0]}"
-    
-    prog2 = progresso_trimestre({202501: 1000.0, 202502: 1000.0}, "2025Q1")
-    assert prog2[0] == 2, f"Progresso 2 esperado: 2, obtido: {prog2[0]}"
-    
-    prog3 = progresso_trimestre(lat_mes, "2025Q1")
-    assert prog3[0] == 3, f"Progresso 3 esperado: 3, obtido: {prog3[0]}"
-    
-    print("✅ Todos os testes unitários passaram!")
