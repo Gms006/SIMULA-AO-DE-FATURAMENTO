@@ -1,97 +1,41 @@
 # Simulação de Faturamento 2025 — Revenda de Veículos (Streamlit)
 
-App Streamlit para **apurar resultados de 2025** a partir de uma planilha real de **notas de veículos** e **simular o que falta faturar** para atingir um **lucro-alvo (LAT)**, mês a mês, considerando **PIS, COFINS, ICMS, IRPJ (com adicional trimestral) e CSLL**.
+App Streamlit para apurar resultados de 2025 a partir da planilha de notas e simular os meses restantes a partir do mês vigente.
 
-> **Público-alvo:** diretoria/financeiro.  
-> **Verdades fiscais:** especificadas abaixo; o app e os testes devem seguir **exatamente** estas fórmulas.
+## Principais regras
 
----
+- **FAT** = soma de notas com `Tipo Nota = Saída`.
+- **COMPRAS** = soma de notas com `Tipo Nota = Entrada` e `Classificação = MERCADORIA PARA REVENDA`, descontando notas com `Natureza Operação` contendo `DEVOLUCAO DE COMPRA`.
+- **LAT** = `FAT - COMPRAS`.
+- Tributos mensais: `PIS = 0,0065 * LAT`; `COFINS = 0,03 * LAT`; `ICMS = 0,05 * FAT`.
+- **IRPJ/CSLL trimestrais**: Base = `0,32 * LAT_mês`.
+  `IRPJ = 0,15 * ΣBase + max(0, 0,10 * (ΣBase - 60000))`.
+  `CSLL = 0,09 * ΣBase`.
+  Valores lançados apenas em **Mar/Jun/Set/Dez**.
 
-## 1) Objetivos
-- Exibir **KPIs** e **gráficos** do realizado em 2025 (entradas, saídas, consumo, LAT, tributos, LL).
-- **Simular** meses restantes (inclusive o **mês vigente**, se habilitado) para atingir um **LAT anual** com margens de **5/10/15/20/25/30%**.
-- Calcular **PIS, COFINS, ICMS** (mensais) e **IRPJ/CSLL** (trimestrais com rateio mensal), seguindo as regras definidas.
-- Permitir **exportar** a simulação (CSV/XLSX). PDF é opcional.
+## Simulação
 
----
+- Meses anteriores ao mês vigente são travados com os valores reais.
+- Opcionalmente é possível editar o mês vigente (adicionando ao parcial). Meses futuros são totalmente simulados.
+- Ao informar o LAT de um mês, o app calcula automaticamente FAT, Compras e ICMS para margens de 5% a 30%. PIS/COFINS sempre usam o LAT do mês.
+- Exportações disponíveis: resumo do mês (CSV) e consolidado anual (XLSX).
 
-## 2) Dados de entrada
-- Arquivo: `resultado_eduardo_veiculos.xlsx`
-- Colunas relevantes (case-insensitive):  
-  `CFOP`, `Data Emissão`, `Emitente CNPJ/CPF`, `Destinatário CNPJ/CPF`, `Chassi`, `Placa`, `Produto`, `Valor Total`, `ICMS Alíquota`, `ICMS Valor`, `ICMS Base`, `Natureza Operação`, `Número NF`, `Tipo Nota`, `Classificação`, etc.
-- `Valor Total` usa **vírgula decimal**.  
-- **Devolução de compra**: se `Natureza Operação` contém “DEVOLUCAO DE COMPRA”, tratar como **abatimento de compras**, não como receita.
+## Execução
 
----
-
-## 3) Apuração do realizado (mês a mês, 2025)
-- **FAT** = soma `Valor Total` com `Tipo Nota = Saída`.
-- **CMV_base** = soma `Valor Total` com `Tipo Nota = Entrada` e `Classificação = MERCADORIA PARA REVENDA`.
-- **CONSUMO** = soma `Valor Total` com `Tipo Nota = Entrada` e `Classificação = CONSUMO`.
-- **Lucro Bruto (LB)** = `FAT – CMV_base`.  
-- **Lucro Antes de Tributos (LAT)** = `LB – CONSUMO`.
-
-### Tributos mensais
-- **PIS** = `0,0065 * LAT`  
-- **COFINS** = `0,03 * LAT`  
-- **ICMS** = `0,05 * FAT`
-
-### IRPJ/CSLL (trimestrais com rateio mensal)
-- Trimestres: **Jan–Mar**, **Abr–Jun**, **Jul–Set**, **Out–Dez**.  
-- **Base_mês = 0,32 * LAT_mês** (regra específica para revenda de veículos, conforme solicitado).  
-- **IRPJ do trimestre**  
-  `IRPJ_tri = 0,15 * ΣBase_tri + max(0, 0,10 * (ΣBase_tri – 60000))`  
-- **CSLL do trimestre**  
-  `CSLL_tri = 0,09 * ΣBase_tri` (não há adicional).  
-- **Rateio mensal** proporcional à `Base_mês` de cada mês do trimestre.
-- **Lucro Líquido (LL)** = `LAT – (PIS + COFINS + ICMS) – IRPJ_rateado – CSLL_rateada`.
-
----
-
-## 4) Simulação (meses restantes, incluindo mês vigente)
-- Detectar o **último mês** presente na planilha:
-  - Meses **≤ último** → **travados** com os valores reais.
-  - Meses **> último** → **simulados**.
-  - **Opcional**: simular o **mês vigente** substituindo o parcial por projeção.
-- **Meta anual**: **LAT 2025** (antes de tributos).
-  - `LAT_restante = LAT_meta_anual – LAT_realizado_YTD`.
-  - Distribuição por padrão **uniforme** (opção **manual** com sliders % que somam 100%).
-- Para cada **margem** `m ∈ {0,05, 0,10, 0,15, 0,20, 0,25, 0,30}`:
-  - Por mês simulado:  
-    `FAT = LAT/m` • `CMV = FAT – LAT` • calcular tributos mensais;  
-    recomputar **IRPJ/CSLL do trimestre** (realizado + simulado) e **ratear**.
-
-> **Compras necessárias** = `CMV` (não usamos estoque; assumimos giro integral no mês).
-
----
-
-## 5) Telas do app
-1. **Dashboard**: KPIs (Entradas/Compras, Saídas/FAT, CONSUMO, LAT, Tributos, LL), gráficos mensais.  
-2. **Simulação**: meta LAT anual, margens, opção “simular mês vigente”, distribuição uniforme/manual, tabela mês a mês + totais, exportações.  
-3. **Notas/Detalhes**: tabela filtrável e download do dataset filtrado.
-
----
-
-## 6) Execução
-### Local
 ```bash
-python -m venv .venv && source .venv/bin/activate  # (Windows: .venv\Scripts\activate)
-pip install -U streamlit pandas numpy plotly openpyxl
+pip install -r requirements.txt
 streamlit run app.py
-.
-├─ agents/
-│  └─ planejador_streamlit.agent.md
-├─ app.py
-├─ calc.py
-├─ tests/
-│  └─ test_calc.py
-├─ bootstrap.sh
-└─ README.md
+```
 
-### Streamlit Cloud
-1. Faça fork deste repositório no GitHub.
-2. No [Streamlit Cloud](https://streamlit.io/cloud), clique em "Deploy" e informe:
-   - Repository: `<seu-usuario>/SIMULA-AO-DE-FATURAMENTO`
-   - Branch: `main`
-   - Main file: `app.py`
-3. Defina as variáveis de ambiente se necessário e finalize o deploy.
+### Testes
+
+```bash
+pytest
+```
+
+## Changelog
+
+- Remoção de parâmetros GitHub e de campos de PIS/COFINS na UI.
+- Simulação focada do mês vigente em diante com PIS/COFINS fixos sobre o LAT.
+- Funções puras de parsing, cenários e IRPJ/CSLL em `calc.py`.
+- Tema acessível e helpers de formatação em `ui_helpers.py`.

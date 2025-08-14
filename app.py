@@ -1,364 +1,208 @@
+
 import streamlit as st
 import pandas as pd
-import plotly.express as px
 from io import BytesIO
-from calc import (
-    prepare_dataframe,
-    compute_realizado,
-    calc_mes,
-    ultimo_yyyymm,
-    meses_simulaveis,
-    trimestre_de,
-    progresso_trimestre,
-    irpj_csll_trimestre,
-)
+from calc import realizado_por_mes, cenarios_por_margem, irpj_csll_trimestre
+from ui_helpers import brl, cenarios_fat_compra, pis_cofins, yyyymm_to_label, MARGENS
 
-# =========================
-# Configuração da página
-# =========================
-st.set_page_config(page_title="Simulação de Faturamento 2025", layout="wide")
 
-# =========================
-# Estilos
-# =========================
-st.markdown(
-    """
-<style>
-div.stMetric {
-    border: 1px solid #E0E0E0;
-    padding: 15px;
-    border-radius: 8px;
-    background-color: #F6F8FC;
-    box-shadow: 0 1px 3px rgba(0,0,0,0.1);
-}
-.card-margem {
-    border: 1px solid #E0E0E0;
-    padding: 15px;
-    border-radius: 8px;
-    background-color: #FFFFFF;
-    margin: 10px 0;
-    box-shadow: 0 1px 3px rgba(0,0,0,0.1);
-}
-.card-titulo {
-    font-weight: bold;
-    font-size: 16px;
-    color: #0F172A;
-    margin-bottom: 8px;
-}
-.badge-trimestre {
-    display: inline-block;
-    padding: 4px 8px;
-    border-radius: 4px;
-    font-size: 12px;
-    font-weight: bold;
-    color: white;
-}
-.badge-completo { background-color: #10B981; }
-.badge-incompleto { background-color: #F59E0B; }
-</style>
-""",
-    unsafe_allow_html=True,
-)
-
-# =========================
-# Sidebar: parâmetros GitHub
-# =========================
-st.sidebar.header("Parâmetros GitHub")
-owner = st.sidebar.text_input("Owner", value="")
-repo = st.sidebar.text_input("Repo", value="SIMULACAO-DE-FATURAMENTO")
-branch = st.sidebar.text_input("Branch", value="main")
-path = st.sidebar.text_input("Path", value="resultado_eduardo_veiculos.xlsx")
-
-@st.cache_data(ttl=300)
-def load_data(owner: str, repo: str, branch: str, path: str):
-    """Carrega dados do GitHub com fallback local e uploader."""
-    if owner:
-        url = f"https://raw.githubusercontent.com/{owner}/{repo}/{branch}/{path}"
-        try:
-            return pd.read_excel(url, engine="openpyxl")
-        except Exception:
-            st.warning("Falha ao carregar do GitHub. Tentando arquivo local...")
-
-    # Fallback para arquivo local
-    try:
-        return pd.read_excel(path, engine="openpyxl")
-    except Exception:
-        return None
-
-# =========================
-# Utilidades
-# =========================
-def fmt_brl(v: float) -> str:
-    """Formata valor em Real brasileiro."""
-    try:
-        return f"R$ {float(v):,.2f}".replace(",", "X").replace(".", ",").replace("X", ".")
-    except Exception:
-        return "R$ 0,00"
-
-MESES_PT = {
-    1: "Jan", 2: "Fev", 3: "Mar", 4: "Abr", 5: "Mai", 6: "Jun",
-    7: "Jul", 8: "Ago", 9: "Set", 10: "Out", 11: "Nov", 12: "Dez",
-}
-
-def yyyymm_to_parts(yyyymm: int) -> tuple[int, int]:
-    return yyyymm // 100, yyyymm % 100
-
-def montar_df_export(realizado: pd.DataFrame, lat_sim: dict[int, float]) -> pd.DataFrame:
-    """
-    Gera um DataFrame com LAT real/simulado por yyyymm para exportação.
-    Espera realizado com index 1..12 (meses) e colunas ['LAT','FAT'].
-    """
-    linhas = []
-    # Reais (travados)
-    for m in range(1, 13):
-        if m in realizado.index:
-            yyyymm = 202500 + m
-            linhas.append({"yyyymm": yyyymm, "tipo": "Real", "mes": m,
-                           "LAT": float(realizado.loc[m, "LAT"]), "FAT": float(realizado.loc[m, "FAT"])})
-    # Simulados (sobrepõe)
-    for k, v in lat_sim.items():
-        ano, mes = yyyymm_to_parts(k)
-        if ano == 2025:
-            fat_calc = None  # se desejar, pode inferir via calc_mes(v)
-            linhas.append({"yyyymm": k, "tipo": "Simulado", "mes": mes,
-                           "LAT": float(v), "FAT": fat_calc if fat_calc is not None else 0.0})
-    df_out = pd.DataFrame(linhas).sort_values("yyyymm").reset_index(drop=True)
-    df_out["mes_nome"] = df_out["mes"].map(MESES_PT)
-    return df_out
-
-def download_excel_button(df: pd.DataFrame, filename: str, label: str = "Baixar Excel"):
-    with BytesIO() as buffer:
-        with pd.ExcelWriter(buffer, engine="openpyxl") as writer:
-            df.to_excel(writer, index=False, sheet_name="Simulacao")
-        st.download_button(label, data=buffer.getvalue(), file_name=filename, mime="application/vnd.openxmlformats-officedocument.spreadsheetml.sheet")
-
-# =========================
-# Carregamento de dados
-# =========================
-df = load_data(owner, repo, branch, path)
-if df is None:
-    uploaded = st.file_uploader("Envie a planilha resultado_eduardo_veiculos.xlsx", type="xlsx")
-    if uploaded:
-        df = pd.read_excel(uploaded, engine="openpyxl")
-
-if df is None:
-    st.error("Não foi possível carregar os dados. Verifique o arquivo ou parâmetros GitHub.")
-    st.stop()
-
-# =========================
-# Processamento base
-# =========================
-df = prepare_dataframe(df)
-realizado = compute_realizado(df)  # esperado index 1..12 com colunas ['FAT','LAT']
-ultimo = ultimo_yyyymm(df)         # ex: 202503
-last_month = (ultimo % 100) if ultimo else 0
-
-# =========================
-# Página
-# =========================
-pagina = st.sidebar.selectbox("Página", ["Simulação", "Dashboard", "Notas/Detalhes"])
-
-# =========================
-# Página: Simulação
-# =========================
-if pagina == "Simulação":
-    st.title("Simulação de Faturamento 2025")
-
-    # Estado para LATs simulados
-    if "lat_sim" not in st.session_state:
-        st.session_state["lat_sim"] = {}
-    lat_sim: dict[int, float] = st.session_state["lat_sim"]
-
-    # Resumo YTD (dados reais até o último mês disponível)
-    st.subheader("Resumo 2025")
-    if last_month > 0:
-        fat_ytd = float(realizado.loc[1:last_month, "FAT"].sum())
-        lat_ytd = float(realizado.loc[1:last_month, "LAT"].sum())
-    else:
-        fat_ytd = lat_ytd = 0.0
-    c1, c2 = st.columns(2)
-    c1.metric("Faturado YTD", fmt_brl(fat_ytd))
-    c2.metric("LAT YTD", fmt_brl(lat_ytd))
-
-    st.markdown("---")
-    col_mes, col_toggle = st.columns([4, 1])
-    with col_toggle:
-        sim_vigente = st.checkbox("Simular mês vigente", False)
-
-    # Meses simuláveis
-    meses_disp = meses_simulaveis(ultimo)  # lista de yyyymm
-    if sim_vigente and ultimo and ultimo not in meses_disp:
-        meses_disp.insert(0, ultimo)
-    if not meses_disp:
-        st.info("Todos os meses de 2025 já estão realizados ou não há dados disponíveis.")
-        st.stop()
-
-    with col_mes:
-        # CORREÇÃO: usar default= (e não selection=)
-        mes_atual = st.segmented_control(
-            "Meses simuláveis",
-            meses_disp,
-            default=st.session_state.get("mes_atual", meses_disp[0]),
-            format_func=lambda m: MESES_PT[m % 100],
-        )
-    st.session_state["mes_atual"] = mes_atual
-
-    # Editor do mês selecionado
-    st.markdown("---")
-    ano_sel, mes_sel = yyyymm_to_parts(mes_atual)
-    st.subheader(f"Editor: {MESES_PT[mes_sel].upper()} {ano_sel}")
-
-    lat_val_default = float(lat_sim.get(mes_atual, 0.0))
-    col_lat, col_prop = st.columns([3, 1])
-    with col_lat:
-        lat_input = st.number_input(
-            "LAT do mês (R$)",
-            min_value=0.0,
-            step=1000.0,
-            value=lat_val_default,
-            key=f"lat_{mes_atual}",
-        )
-    with col_prop:
-        propagar = st.checkbox("Aplicar este LAT aos próximos meses")
-
-    # Atualiza e propaga
-    lat_sim[mes_atual] = float(lat_input)
-    if propagar:
-        for m in meses_disp:
-            if m >= mes_atual:
-                lat_sim[m] = float(lat_input)
-
-    # Cenários por margem
-    st.markdown("#### Cenários por Margem")
-    res_mes = calc_mes(float(lat_input))
-    cenarios = res_mes["cenarios"]  # dict {margem: {"FAT":..., "COMPRAS":..., "ICMS":...}}
-    margens = [0.05, 0.10, 0.15, 0.20, 0.25, 0.30]
-
-    for i in range(0, 6, 2):
-        c1, c2 = st.columns(2)
-        with c1:
-            m = margens[i]
-            st.markdown(f'<div class="card-margem"><div class="card-titulo">Margem {int(m*100)}%</div></div>', unsafe_allow_html=True)
-            st.metric("Faturamento", fmt_brl(cenarios[m]["FAT"]))
-            st.metric("Compras", fmt_brl(cenarios[m]["COMPRAS"]))
-        if i + 1 < len(margens):
-            with c2:
-                m = margens[i + 1]
-                st.markdown(f'<div class="card-margem"><div class="card-titulo">Margem {int(m*100)}%</div></div>', unsafe_allow_html=True)
-                st.metric("Faturamento", fmt_brl(cenarios[m]["FAT"]))
-                st.metric("Compras", fmt_brl(cenarios[m]["COMPRAS"]))
-
-    # Tributos do mês (PIS/COFINS fixos para o LAT; ICMS depende da margem -> usar 20% como referência)
-    st.markdown("#### Tributos do Mês")
-    pis = float(res_mes["PIS"])
-    cofins = float(res_mes["COFINS"])
-    icms_ref = float(cenarios[0.20]["ICMS"])
-
-    c1, c2, c3 = st.columns(3)
-    c1.metric("PIS (mês)", fmt_brl(pis))
-    c2.metric("COFINS (mês)", fmt_brl(cofins))
-    c3.metric("ICMS (mês)*", fmt_brl(icms_ref))
-    st.caption("*ICMS depende do faturamento (varia por margem).")
-
-    # Obrigações do Trimestre
-    st.markdown("---")
-    st.subheader("Obrigações do Trimestre")
-
-    # LAT total: reais + simulados
-    lat_total: dict[int, float] = {}
-    # reais (travados até 'ultimo')
-    for m in range(1, 13):
-        if ultimo and (202500 + m) <= ultimo and m in realizado.index:
-            lat_total[202500 + m] = float(realizado.loc[m, "LAT"])
-    # simulados
-    lat_total.update({int(k): float(v) for k, v in lat_sim.items()})
-
-    tri_key = trimestre_de(mes_atual)  # ex: (2025, 1) para tri 1/2025
-    prog, total, faltantes = progresso_trimestre(lat_total, tri_key)
-
-    badge_class = "badge-completo" if prog == total else "badge-incompleto"
+def inject_css():
     st.markdown(
-        f'<span class="badge-trimestre {badge_class}">Completo {prog}/{total}</span>',
+        """
+        <style>
+        .app-container {max-width: 1280px; margin: 0 auto;}
+        section.main > div {padding-top: 0.5rem;}
+        .kpi-grid {display: grid; grid-template-columns: repeat(5, 1fr); gap: 14px;}
+        @media (max-width: 1200px){ .kpi-grid {grid-template-columns: repeat(3, 1fr);} }
+        @media (max-width: 780px){ .kpi-grid {grid-template-columns: repeat(2, 1fr);} }
+        @media (max-width: 520px){ .kpi-grid {grid-template-columns: 1fr;} }
+        .card {border:1px solid #E5E7EB;background:#FFF;border-radius:12px;padding:16px 16px 14px;box-shadow:0 2px 6px rgba(15,23,42,.05);}
+        .card h4 {font-size:12.5px;font-weight:600;letter-spacing:.3px;color:#475569;margin:0 0 6px 0;text-transform:uppercase;}
+        .card .value {font-variant-numeric:tabular-nums;font-weight:700;font-size:26px;color:#0F172A;margin:0;}
+        .muted { color:#64748B; font-size:12px; margin-top:4px; }
+        .section {margin-top:18px;margin-bottom:6px;}
+        .section h3 {margin:0;font-size:18px;}
+        .section .sub {color:#64748B;font-size:12.5px;margin-top:2px;}
+        .metric-grid {display:grid;grid-template-columns:repeat(3,1fr);gap:14px;}
+        @media (max-width:900px){ .metric-grid {grid-template-columns:1fr;} }
+        </style>
+        """,
         unsafe_allow_html=True,
     )
 
-    if prog < total:
-        st.warning("Complete os 3 meses para apurar o trimestre.")
-        if faltantes:
-            cols = st.columns(len(faltantes))
-            for idx, m in enumerate(faltantes):
-                if m in meses_disp:
-                    if cols[idx].button(MESES_PT[m % 100], key=f"goto_{m}"):
-                        st.session_state["mes_atual"] = m
-                        st.rerun()
 
-    irpj, csll, fechamento = irpj_csll_trimestre(lat_total, tri_key)  # fechamento: yyyymm do mês de apuração
-    cc1, cc2 = st.columns(2)
-    if mes_atual == fechamento and prog == total:
-        cc1.metric(f"IRPJ – {MESES_PT[fechamento % 100]} (trimestre)", fmt_brl(float(irpj)))
-        cc2.metric(f"CSLL – {MESES_PT[fechamento % 100]} (trimestre)", fmt_brl(float(csll)))
+inject_css()
+st.set_page_config(page_title="Simulação de Faturamento 2025", layout="wide")
+
+MESES_PT = {1:"Jan",2:"Fev",3:"Mar",4:"Abr",5:"Mai",6:"Jun",7:"Jul",8:"Ago",9:"Set",10:"Out",11:"Nov",12:"Dez"}
+
+
+def load_data() -> pd.DataFrame:
+    url = "https://raw.githubusercontent.com/eduardoveiculos/SIMULA-AO-DE-FATURAMENTO/main/resultado_eduardo_veiculos.xlsx"
+    try:
+        return pd.read_excel(url, engine="openpyxl")
+    except Exception:
+        try:
+            return pd.read_excel("resultado_eduardo_veiculos.xlsx", engine="openpyxl")
+        except Exception:
+            up = st.file_uploader("Carregar planilha", type=["xlsx"])
+            if up:
+                return pd.read_excel(up, engine="openpyxl")
+            return pd.DataFrame()
+
+
+@st.cache_data(ttl=300)
+def get_realizado():
+    df_raw = load_data()
+    if df_raw.empty:
+        return pd.DataFrame(), 0
+    realizado = realizado_por_mes(df_raw)
+    non_zero = realizado[(realizado[["FAT","COMPRAS"]] != 0).any(axis=1)]
+    mes_vigente = int(non_zero.index.max()) if not non_zero.empty else 202501
+    return realizado, mes_vigente
+
+
+realizado, mes_vigente = get_realizado()
+
+with st.sidebar:
+    st.header("Simulação")
+    st.selectbox("Ano", [2025], index=0)
+    sim_vigente = st.checkbox("Simular mês vigente", value=False)
+    st.divider()
+    if st.button("Propagar LAT do mês atual para os próximos"):
+        if "mes_sel" in st.session_state:
+            idx = st.session_state["mes_sel"]%100-1
+            val = st.session_state["tabela"].at[idx,"LAT (R$)"]
+            for j in range(idx+1,12):
+                st.session_state["tabela"].at[j,"LAT (R$)"]=val
+    if st.button("Zerar simulação", type="secondary"):
+        for j in range(12):
+            y = 202501+j
+            if y>=mes_vigente:
+                st.session_state["tabela"].at[j,"LAT (R$)"]=0.0
+
+if "tabela" not in st.session_state:
+    tbl = pd.DataFrame({"Mês":[MESES_PT[i] for i in range(1,13)],"LAT (R$)":[0.0]*12,"Obs":[""]*12})
+    for i,y in enumerate(range(202501,202513)):
+        if y<mes_vigente:
+            tbl.at[i,"LAT (R$)"]=realizado.at[y,"LAT"]
+    st.session_state["tabela"] = tbl
+    st.session_state["real_lat"]={i:realizado.at[202501+i,"LAT"] for i in range(12) if 202501+i<=mes_vigente}
+    st.session_state["real_fat"]={i:realizado.at[202501+i,"FAT"] for i in range(12) if 202501+i<=mes_vigente}
+    st.session_state["real_comp"]={i:realizado.at[202501+i,"COMPRAS"] for i in range(12) if 202501+i<=mes_vigente}
+
+lock = [i for i in range((mes_vigente%100)-1)]
+if not sim_vigente:
+    lock.append((mes_vigente%100)-1)
+mask = pd.DataFrame(False,index=range(12),columns=["Mês","LAT (R$)","Obs"])
+mask.loc[lock,"LAT (R$)"]=True
+edit = st.data_editor(
+    st.session_state["tabela"],
+    hide_index=True,
+    column_config={
+        "Mês": st.column_config.TextColumn("Mês", disabled=True, width="small"),
+        "LAT (R$)": st.column_config.NumberColumn("LAT (R$)", min_value=0.0, step=100.0, format="R$ %.2f"),
+        "Obs": st.column_config.TextColumn("Obs", width="medium"),
+    },
+    disabled=mask,
+    num_rows="fixed",
+    use_container_width=True,
+)
+for i,v in st.session_state["real_lat"].items():
+    edit.at[i,"LAT (R$)"]=v
+st.session_state["tabela"]=edit
+
+if not realizado.empty:
+    ytd = realizado.loc[realizado.index<=mes_vigente].sum()
+    lat_dict = realizado.loc[realizado.index<=mes_vigente,"LAT"].to_dict()
+    trib_ytd = irpj_csll_trimestre(lat_dict)
+    irpj_ytd = sum(v[0] for m,v in trib_ytd.items() if m<=mes_vigente)
+    csll_ytd = sum(v[1] for m,v in trib_ytd.items() if m<=mes_vigente)
+    pis_ytd = 0.0065*ytd["LAT"]
+    cof_ytd = 0.03*ytd["LAT"]
+    icms_ytd = 0.05*ytd["FAT"]
+    lucro_liq = ytd["LAT"]-(pis_ytd+cof_ytd+icms_ytd+irpj_ytd+csll_ytd)
+    st.markdown('<div class="kpi-grid">', unsafe_allow_html=True)
+    st.markdown(f'<div class="card"><h4>Entradas</h4><p class="value">{brl(ytd["COMPRAS"])}</p></div>', unsafe_allow_html=True)
+    st.markdown(f'<div class="card"><h4>Saídas</h4><p class="value">{brl(ytd["FAT"])}</p></div>', unsafe_allow_html=True)
+    st.markdown(f'<div class="card"><h4>LAT</h4><p class="value">{brl(ytd["LAT"])}</p></div>', unsafe_allow_html=True)
+    st.markdown(f'<div class="card warn"><h4>Lucro Líquido</h4><p class="value">{brl(lucro_liq)}</p></div>', unsafe_allow_html=True)
+    st.markdown(f'<div class="card"><h4>Mês Vigente</h4><p class="value">{yyyymm_to_label(mes_vigente)}</p></div>', unsafe_allow_html=True)
+    st.markdown('</div>', unsafe_allow_html=True)
+
+meses = [202500+i for i in range(1,13)]
+mes_sel = st.segmented_control("Mês", options=meses, default=meses[0], format_func=lambda x: MESES_PT[x%100])
+st.session_state["mes_sel"]=mes_sel
+
+lat_total = {}
+for i,y in enumerate(meses):
+    real = st.session_state["real_lat"].get(i,0.0)
+    sim = st.session_state["tabela"].at[i,"LAT (R$)"] if y>=mes_vigente else 0.0
+    if y<mes_vigente:
+        lat_total[y]=real
+    elif y==mes_vigente:
+        lat_total[y]=real + (sim if sim_vigente else 0.0)
     else:
-        cc1.metric("IRPJ – trimestre", fmt_brl(0.0))
-        cc2.metric("CSLL – trimestre", fmt_brl(0.0))
+        lat_total[y]=sim
+trib_map = irpj_csll_trimestre(lat_total)
 
-    # Exportação
-    st.markdown("---")
-    st.subheader("Exportar Simulação")
-    df_export = montar_df_export(realizado, lat_sim)
-    st.dataframe(df_export, use_container_width=True)
-    download_excel_button(df_export, "simulacao_2025.xlsx", "Baixar Excel da Simulação")
-
-# =========================
-# Página: Dashboard
-# =========================
-elif pagina == "Dashboard":
-    st.title("Dashboard")
-
-    # Base para gráfico FAT vs LAT (reais apenas)
-    df_plot = (
-        realizado.reset_index()
-        .rename(columns={"index": "mes"})
-        .assign(mes_nome=lambda d: d["mes"].map(MESES_PT))
-    )
-
-    c1, c2 = st.columns(2)
-    c1.metric("Faturado Ano", fmt_brl(float(df_plot["FAT"].sum())))
-    c2.metric("LAT Ano", fmt_brl(float(df_plot["LAT"].sum())))
-
-    st.markdown("#### Faturamento (FAT) x LAT por mês (real)")
-    fig = px.bar(
-        df_plot,
-        x="mes_nome",
-        y=["FAT", "LAT"],
-        barmode="group",
-        labels={"value": "Valor", "mes_nome": "Mês", "variable": "Tipo"},
-    )
-    st.plotly_chart(fig, use_container_width=True)
-
-    st.markdown("#### Tabela (real)")
-    st.dataframe(
-        df_plot[["mes", "mes_nome", "FAT", "LAT"]].rename(
-            columns={"mes": "Mês", "mes_nome": "Nome do Mês", "FAT": "Faturamento", "LAT": "LAT"}
-        ),
-        use_container_width=True,
-    )
-
-# =========================
-# Página: Notas/Detalhes
-# =========================
+idx = mes_sel%100-1
+if mes_sel<mes_vigente:
+    lat_mes = st.session_state["real_lat"].get(idx,0.0)
+elif mes_sel==mes_vigente:
+    lat_real = st.session_state["real_lat"].get(idx,0.0)
+    lat_sim = st.session_state["tabela"].at[idx,"LAT (R$)"] if sim_vigente else 0.0
+    lat_mes = lat_real + lat_sim
 else:
-    st.title("Notas e Detalhes")
-    st.markdown(
-        """
-- **Dados 'realizado'**: consolidados a partir da planilha base.
-- **LAT simulado**: armazenado em `st.session_state["lat_sim"]` por `yyyymm`.
-- **Cenários por margem**: usam `calc_mes(LAT)` para estimar FAT, COMPRAS e ICMS.
-- **Trimestre**: `progresso_trimestre` verifica 3 meses completos; `irpj_csll_trimestre` só exibe valores no mês de fechamento e se o trio estiver completo.
-- **Exportação**: inclui linhas “Real” e “Simulado”; o FAT simulado pode ser preenchido via cenários caso você deseje (aqui deixei 0 para FAT simulado por simplicidade).
-- **Segmented Control**: use `default=` (não `selection=`). Se sua versão do Streamlit não tiver `st.segmented_control`, substitua por `st.selectbox`.
-        """
-    )
-    st.code(
-        "mes_atual = st.segmented_control('Meses simuláveis', meses_disp, default=meses_disp[0], format_func=lambda m: MESES_PT[m % 100])",
-        language="python",
-    )
+    lat_mes = st.session_state["tabela"].at[idx,"LAT (R$)"]
+
+cen = cenarios_fat_compra(lat_mes)
+pis_mes, cof_mes = pis_cofins(lat_mes)
+ref = st.segmented_control("Cenário", options=[int(m*100) for m in MARGENS], default=20, format_func=lambda x: f"{x}%")
+vals = cen.get(ref,{"FAT":0.0,"COMPRA":0.0,"ICMS":0.0})
+
+st.markdown('<div class="section"><h3>Simulação do mês</h3><div class="sub">FAT/Compra variam por margem; PIS/COFINS fixos sobre o LAT</div></div>', unsafe_allow_html=True)
+
+st.markdown('<div class="metric-grid">', unsafe_allow_html=True)
+st.markdown(f'<div class="card"><h4>Faturamento (ref. {ref}%)</h4><p class="value">{brl(vals["FAT"])}</p></div>', unsafe_allow_html=True)
+st.markdown(f'<div class="card"><h4>Compras (ref. {ref}%)</h4><p class="value">{brl(vals["COMPRA"])}</p></div>', unsafe_allow_html=True)
+st.markdown(f'<div class="card"><h4>ICMS (ref. {ref}%)</h4><p class="value">{brl(vals["ICMS"])}</p></div>', unsafe_allow_html=True)
+st.markdown('</div>', unsafe_allow_html=True)
+
+st.markdown('<div class="metric-grid">', unsafe_allow_html=True)
+st.markdown(f'<div class="card"><h4>PIS (mês)</h4><p class="value">{brl(pis_mes)}</p></div>', unsafe_allow_html=True)
+st.markdown(f'<div class="card"><h4>COFINS (mês)</h4><p class="value">{brl(cof_mes)}</p></div>', unsafe_allow_html=True)
+if mes_sel in trib_map:
+    irpj, csll = trib_map[mes_sel]
+    st.markdown(f'<div class="card"><h4>IRPJ</h4><p class="value">{brl(irpj)}</p></div>', unsafe_allow_html=True)
+    st.markdown(f'<div class="card"><h4>CSLL</h4><p class="value">{brl(csll)}</p></div>', unsafe_allow_html=True)
+st.markdown('</div>', unsafe_allow_html=True)
+
+# mês vigente breakdown
+if mes_sel==mes_vigente and sim_vigente:
+    lat_real = st.session_state["real_lat"].get(idx,0.0)
+    lat_sim = st.session_state["tabela"].at[idx,"LAT (R$)"]
+    st.markdown(f"Realizado até agora: {brl(lat_real)} | Simulado: {brl(lat_sim)} | Total do mês: {brl(lat_real+lat_sim)}")
+
+# exportações
+mes_df = pd.DataFrame({
+    "Mês":[MESES_PT[mes_sel%100]],
+    "LAT":[lat_mes],
+    "PIS":[pis_mes],
+    "COFINS":[cof_mes],
+})
+st.download_button("Baixar resumo do mês", data=mes_df.to_csv(index=False).encode("utf-8"), file_name=f"resumo_{mes_sel}.csv", mime="text/csv")
+
+rows=[]
+for y in meses:
+    lat = lat_total[y]
+    cen20 = cenarios_por_margem(lat)[20]
+    pis, cof = pis_cofins(lat)
+    irpj, csll = trib_map.get(y,(0.0,0.0))
+    rows.append({"Mês": yyyymm_to_label(y), "LAT": lat, "FAT": cen20["FAT"], "COMPRAS": cen20["COMPRAS"], "PIS": pis, "COFINS": cof, "IRPJ": irpj, "CSLL": csll})
+annual = pd.DataFrame(rows)
+
+buf = BytesIO()
+with pd.ExcelWriter(buf, engine="openpyxl") as w:
+    annual.to_excel(w, index=False)
+st.download_button("Baixar Consolidado Anual (XLSX)", data=buf.getvalue(), file_name="consolidado.xlsx")
