@@ -15,14 +15,14 @@ from ui_helpers import brl, cenarios_fat_compra, pis_cofins, yyyymm_to_label
 st.set_page_config(page_title="Simulação de Faturamento 2025", layout="wide")
 
 # =========================
-# CSS (layout corporativo)
+# CSS (estilo próximo ao design do outro app)
 # =========================
 def inject_css():
     st.markdown(
         """
         <style>
         .app-container {max-width: 1280px; margin: 0 auto;}
-        section.main > div {padding-top: 0.5rem;}
+        section.main > div {padding-top: 0.25rem;}
 
         .kpi-grid {display: grid; grid-template-columns: repeat(5, 1fr); gap: 14px;}
         @media (max-width: 1200px){ .kpi-grid {grid-template-columns: repeat(3, 1fr);} }
@@ -31,6 +31,12 @@ def inject_css():
 
         .metric-grid {display:grid; grid-template-columns: repeat(3,1fr); gap:14px;}
         @media (max-width: 900px){ .metric-grid {grid-template-columns: 1fr; } }
+
+        .panel {border:1px solid #E5E7EB; background:#FFFFFF; border-radius:12px; padding:14px 16px; box-shadow: 0 2px 6px rgba(15,23,42,.05);}
+        .panel h4 {margin:0 0 6px 0; font-size:13px; color:#475569; text-transform:uppercase; letter-spacing:.2px;}
+        .panel .label {font-size:12px; color:#64748B; margin-bottom:4px;}
+        .panel .row {display:grid; grid-template-columns: 1fr 1fr; gap:12px;}
+        .panel .muted { color:#64748B; font-size: 12px; margin-top: 4px; }
 
         .card {
             border: 1px solid #E5E7EB;
@@ -58,9 +64,10 @@ def inject_css():
         .section h3 {margin:0; font-size: 18px;}
         .section .sub {color:#64748B; font-size: 12.5px; margin-top:2px;}
 
+        /* Dark look (similar ao segundo screenshot) */
         @media (prefers-color-scheme: dark){
-            .card { background:#0B1220; border-color:#1F2937; }
-            .card h4 { color:#94A3B8; }
+            .panel, .card { background:#0B1220; border-color:#1F2937; }
+            .panel h4, .card h4 { color:#94A3B8; }
             .card .value { color:#E2E8F0; }
             .ok   { background:#052E2B; }
             .warn { background:#2B2412; }
@@ -76,10 +83,7 @@ inject_css()
 # =========================
 # Constantes
 # =========================
-MESES_PT = {
-    1: "Jan", 2: "Fev", 3: "Mar", 4: "Abr", 5: "Mai", 6: "Jun",
-    7: "Jul", 8: "Ago", 9: "Set", 10: "Out", 11: "Nov", 12: "Dez",
-}
+MESES_PT = {1:"Jan",2:"Fev",3:"Mar",4:"Abr",5:"Mai",6:"Jun",7:"Jul",8:"Ago",9:"Set",10:"Out",11:"Nov",12:"Dez"}
 
 # =========================
 # Carregamento de dados
@@ -108,49 +112,6 @@ def to_excel(df: pd.DataFrame) -> bytes:
     return buf.getvalue()
 
 # =========================
-# Ações de simulação
-# =========================
-def propagar_lat():
-    """Propaga o LAT do mês selecionado para todos os meses posteriores destravados."""
-    if "tabela" not in st.session_state:
-        return
-    df = st.session_state["tabela"].copy()
-    mes_sel = st.session_state.get("mes_selecionado", 1)
-    idx = mes_sel - 1
-    val = df.at[idx, "LAT (R$)"]
-    locked = st.session_state.get("meses_travados", [])
-    for j in range(idx + 1, 12):
-        if (j + 1) not in locked:
-            df.at[j, "LAT (R$)"] = val
-    st.session_state["tabela"] = df
-
-def zerar_simulacao():
-    """Zera valores simulados (mantém realizado nos meses travados)."""
-    if "tabela" not in st.session_state:
-        return
-    df = st.session_state["tabela"].copy()
-    locked = st.session_state.get("meses_travados", [])
-    realizado = st.session_state.get("valores_realizados", {})
-    for i in range(12):
-        mes_num = i + 1
-        if mes_num not in locked:
-            df.at[i, "LAT (R$)"] = 0.0
-        else:
-            df.at[i, "LAT (R$)"] = realizado.get(mes_num, 0.0)
-    st.session_state["tabela"] = df
-
-def preencher_reais_ytd():
-    """Preenche (ou restaura) LAT dos meses até o vigente com os valores realizados."""
-    if "tabela" not in st.session_state:
-        return
-    df = st.session_state["tabela"].copy()
-    realizado = st.session_state.get("valores_realizados", {})
-    mes_vig_num = st.session_state.get("mes_vig_num", 0)
-    for i in range(mes_vig_num):
-        df.at[i, "LAT (R$)"] = realizado.get(i + 1, 0.0)
-    st.session_state["tabela"] = df
-
-# =========================
 # Sidebar minimalista
 # =========================
 with st.sidebar:
@@ -160,11 +121,11 @@ with st.sidebar:
                               help="Permite editar o mês vigente (soma realizado + simulado)")
     st.divider()
     c1, c2 = st.columns(2)
-    if c1.button("📈 Propagar LAT", help="Copia LAT do mês atual para os próximos"):
-        propagar_lat()
+    if c1.button("📈 Propagar LAT", help="Copia o LAT do mês selecionado (abaixo) para os próximos meses editáveis"):
+        st.session_state["__propagar__"] = True
         st.rerun()
-    if c2.button("🗑️ Zerar", type="secondary", help="Remove valores simulados"):
-        zerar_simulacao()
+    if c2.button("🗑️ Zerar simulação", type="secondary", help="Zera apenas meses editáveis (mantém realizado nos travados)"):
+        st.session_state["__zerar__"] = True
         st.rerun()
 
 # =========================
@@ -182,66 +143,53 @@ if df_raw.empty:
 df_norm = prepare_dataframe(df_raw)
 vigente_yyyymm = mes_vigente(df_norm)  # último yyyymm presente na planilha
 mes_vig_num = (vigente_yyyymm % 100) if vigente_yyyymm else 0
-st.session_state["mes_vig_num"] = mes_vig_num
 
 # Realizado por mês (dict por yyyymm)
 realizado_dict = realizado_por_mes(df_raw)  # {yyyymm: {"FAT", "COMPRAS", "LAT"}}
 
 # =========================
-# Inicialização do planejamento (session_state)
+# Estado do planejamento (LAT simulado por mês)
 # =========================
-if "tabela" not in st.session_state:
-    st.session_state["tabela"] = pd.DataFrame({
-        "Mês": [MESES_PT[i] for i in range(1, 13)],
-        "LAT (R$)": pd.Series([None] * 12, dtype="float"),
-        "Obs": [""] * 12,
-    })
+if "lat_plan" not in st.session_state:
+    st.session_state["lat_plan"] = {}
+    # Pré-preenche: meses < vigente ficam com LAT Real (somente leitura), demais 0.0
+    for m in range(1, 13):
+        ymm = 2025 * 100 + m
+        if m < mes_vig_num:
+            st.session_state["lat_plan"][ymm] = float(realizado_dict.get(ymm, {}).get("LAT", 0.0))
+        elif m == mes_vig_num and not sim_vigente:
+            st.session_state["lat_plan"][ymm] = float(realizado_dict.get(ymm, {}).get("LAT", 0.0))
+        else:
+            st.session_state["lat_plan"][ymm] = 0.0
 
-    # Travar meses anteriores ao vigente (se não marcar sim_vigente, inclui o próprio vigente)
-    st.session_state["meses_travados"] = (
-        list(range(1, mes_vig_num + 1)) if not sim_vigente else list(range(1, mes_vig_num))
-    )
-
-    # Guardar realizado (LAT) por mês 1..12
-    st.session_state["valores_realizados"] = {}
-    for i in range(1, 13):
-        yyyymm = 2025 * 100 + i
-        lat_real = float(realizado_dict.get(yyyymm, {}).get("LAT", 0.0))
-        if i <= mes_vig_num:
-            st.session_state["tabela"].at[i - 1, "LAT (R$)"] = lat_real
-            st.session_state["valores_realizados"][i] = lat_real
+# Ações globais vindas do sidebar
+if st.session_state.pop("__zerar__", False):
+    for m in range(1,13):
+        ymm = 2025*100+m
+        editavel = (m > mes_vig_num) or (m == mes_vig_num and sim_vigente)
+        if editavel:
+            st.session_state["lat_plan"][ymm] = 0.0
 
 # =========================
 # KPIs YTD (somente realizado)
 # =========================
 def kpis_ytd(realizado_dict: dict, mes_limite: int) -> dict:
-    """Calcula KPIs YTD somente com realizado até mes_limite (1..12)."""
     fat = compras = lat = 0.0
     pis = cofins = icms = irpj = csll = 0.0
-
-    # Somatórios mensais (PIS/COFINS sobre LAT; ICMS 5% sobre FAT)
     lat_por_mes = {}
     for m in range(1, mes_limite + 1):
-        yyyymm = 2025 * 100 + m
-        vals = realizado_dict.get(yyyymm, {"FAT": 0.0, "COMPRAS": 0.0, "LAT": 0.0})
+        ymm = 2025 * 100 + m
+        vals = realizado_dict.get(ymm, {"FAT": 0.0, "COMPRAS": 0.0, "LAT": 0.0})
         f, c, l = float(vals["FAT"]), float(vals["COMPRAS"]), float(vals["LAT"])
-        fat += f
-        compras += c
-        lat += l
-        p, co = pis_cofins(l)
-        pis += p
-        cofins += co
+        fat += f; compras += c; lat += l
+        p, co = pis_cofins(l); pis += p; cofins += co
         icms += 0.05 * f
-        lat_por_mes[yyyymm] = l
-
-    # IRPJ/CSLL somente nos fechamentos já ocorridos
+        lat_por_mes[ymm] = l
     trib_map = irpj_csll_trimestre(lat_por_mes)
     for ymm, (ir, cs) in trib_map.items():
         mes = ymm % 100
         if mes <= mes_limite:
-            irpj += ir
-            csll += cs
-
+            irpj += ir; csll += cs
     ll = lat - (pis + cofins + icms + irpj + csll)
     return {"FAT": fat, "COMPRAS": compras, "LAT": lat, "LL": ll}
 
@@ -263,101 +211,112 @@ if mes_vig_num > 0:
     st.markdown('</div>', unsafe_allow_html=True)
 
 # =========================
-# Planejamento LAT (tabela editável)
+# Planejamento LAT – estilo "steppers" por mês
 # =========================
 st.markdown(
     '<div class="section"><h3>📝 Planejamento LAT 2025</h3>'
-    '<div class="sub">Digite o LAT desejado para cada mês. Meses passados estão travados.</div></div>',
+    '<div class="sub">Digite o LAT de cada mês. Meses anteriores ao vigente ficam bloqueados; '
+    'o vigente só é editável se a opção estiver marcada no menu.</div></div>',
     unsafe_allow_html=True
 )
 
-# Ações do planejamento
-cpa, cpb = st.columns(2)
-if cpa.button("↩️ Preencher pelos valores reais YTD"):
-    preencher_reais_ytd()
-if cpb.button("➡️ Propagar LAT (mês atual → próximos)"):
-    propagar_lat()
+# Mês selecionado para simulação (usado também pela ação Propagar)
+if "mes_selecionado" not in st.session_state:
+    st.session_state["mes_selecionado"] = mes_vig_num if mes_vig_num > 0 else 1
 
-# Máscara de bloqueio por mês
-mask_df = pd.DataFrame(False, index=st.session_state["tabela"].index, columns=st.session_state["tabela"].columns)
-for mes_travado in st.session_state["meses_travados"]:
-    mask_df.at[mes_travado - 1, "LAT (R$)"] = True
+# Renderiza expanders por mês (design similar ao do outro app)
+for m in range(1, 13):
+    ymm = 2025 * 100 + m
+    is_locked = (m < mes_vig_num) or (m == mes_vig_num and not sim_vigente)
+    default_val = float(st.session_state["lat_plan"].get(ymm, 0.0))
 
-df_editado = st.data_editor(
-    st.session_state["tabela"],
-    hide_index=True,
-    column_config={
-        "Mês": st.column_config.TextColumn("Mês", disabled=True, width="small"),
-        "LAT (R$)": st.column_config.NumberColumn(
-            "LAT (R$)",
+    with st.expander(f"{MESES_PT[m]}/2025", expanded=(m == st.session_state["mes_selecionado"])):
+        st.markdown('<div class="panel">', unsafe_allow_html=True)
+        st.markdown(f'<h4>LAT (R$)</h4><div class="label">{"Travado (somente realizado)" if is_locked else "Informe o LAT do mês"}</div>', unsafe_allow_html=True)
+        val = st.number_input(
+            label="",
             min_value=0.0,
             step=100.0,
-            format="R$ %.2f",  # evita sprintf placeholder
-            width="medium",
-        ),
-        "Obs": st.column_config.TextColumn("Obs", width="large"),
-    },
-    disabled=mask_df,
-    num_rows="fixed",
-    use_container_width=True,
-    key="data_editor",
-)
-st.session_state["tabela"] = df_editado
+            format="%.2f",
+            value=default_val,
+            key=f"lat_input_{ymm}",
+            disabled=is_locked
+        )
+        # Atualiza estado se editável
+        if not is_locked:
+            st.session_state["lat_plan"][ymm] = float(val)
+
+        # Se foi pedida a propagação a partir deste mês
+        if st.session_state.pop("__propagar__", False) and (m == st.session_state["mes_selecionado"]):
+            base = float(st.session_state["lat_plan"][ymm])
+            for k in range(m + 1, 13):
+                ymm2 = 2025 * 100 + k
+                is_locked2 = (k < mes_vig_num) or (k == mes_vig_num and not sim_vigente)
+                if not is_locked2:
+                    st.session_state["lat_plan"][ymm2] = base
+                    st.session_state[f"lat_input_{ymm2}"] = base  # reflete no widget
+            st.success("Valores propagados para os meses futuros editáveis.")
+
+        # Botões locais
+        colA, colB = st.columns(2)
+        if colA.button("Usar LAT Real (se houver)", key=f"fill_real_{ymm}"):
+            lat_real = float(realizado_dict.get(ymm, {}).get("LAT", 0.0))
+            st.session_state["lat_plan"][ymm] = lat_real
+            st.session_state[f"lat_input_{ymm}"] = lat_real
+        if colB.button("Copiar para os próximos", key=f"copy_next_{ymm}"):
+            base = float(st.session_state["lat_plan"][ymm])
+            for k in range(m + 1, 13):
+                ymm2 = 2025 * 100 + k
+                is_locked2 = (k < mes_vig_num) or (k == mes_vig_num and not sim_vigente)
+                if not is_locked2:
+                    st.session_state["lat_plan"][ymm2] = base
+                    st.session_state[f"lat_input_{ymm2}"] = base
+            st.success("Valores copiados para os próximos meses editáveis.")
+        st.markdown('</div>', unsafe_allow_html=True)
 
 # =========================
-# Simulação por mês (chips)
+# Simulação por Mês (chips) + cards
 # =========================
 st.markdown(
     '<div class="section"><h3>🎯 Simulação por Mês</h3>'
-    '<div class="sub">Selecione um mês para ver os cenários detalhados</div></div>',
+    '<div class="sub">Selecione um mês para visualizar os cenários e tributos</div></div>',
     unsafe_allow_html=True
 )
-
-# Meses disponíveis para simulação
-if mes_vig_num == 0:
-    # fallback (sem dados na planilha): usa o mês atual
-    mes_vig_num = datetime.today().month
-
-meses_disponiveis = list(range(mes_vig_num if sim_vigente else mes_vig_num + 1, 13)) or [12]
 
 mes_selecionado = st.segmented_control(
     "Mês para simular:",
     options=list(range(1, 13)),
-    default=meses_disponiveis[0],
+    default=st.session_state["mes_selecionado"],
     format_func=lambda x: MESES_PT[x],
     key="selector_mes",
 )
-# Fallback robusto caso o widget retorne None (versões específicas do Streamlit)
 if mes_selecionado is None:
-    mes_selecionado = meses_disponiveis[0]
+    mes_selecionado = st.session_state["mes_selecionado"]
 st.session_state["mes_selecionado"] = mes_selecionado
 
-# =========================
 # Cálculos do mês selecionado
-# =========================
 idx_mes = mes_selecionado - 1
-lat_val = st.session_state["tabela"].at[idx_mes, "LAT (R$)"]
-lat_simulado = float(lat_val) if pd.notna(lat_val) else 0.0
+ymm_sel = 2025 * 100 + mes_selecionado
+lat_simulado = float(st.session_state["lat_plan"].get(ymm_sel, 0.0))
+vals_real = realizado_dict.get(ymm_sel, {"FAT": 0.0, "COMPRAS": 0.0, "LAT": 0.0})
+lat_real = float(vals_real["LAT"])
+fat_real = float(vals_real["FAT"])
+compras_real = float(vals_real["COMPRAS"])
 
-# Realizado do mês (se for vigente e editável)
-fat_real = compras_real = lat_real = 0.0
+if mes_selecionado < mes_vig_num:
+    lat_total = lat_real  # meses passados: somente realizado
+elif mes_selecionado == mes_vig_num:
+    lat_total = (lat_real + lat_simulado) if sim_vigente else lat_real
+else:
+    lat_total = lat_simulado  # meses futuros: somente simulado
+
 if (mes_selecionado == mes_vig_num) and sim_vigente:
-    ymm = 2025 * 100 + mes_selecionado
-    vals = realizado_dict.get(ymm, {"FAT": 0.0, "COMPRAS": 0.0, "LAT": 0.0})
-    fat_real = float(vals["FAT"])
-    compras_real = float(vals["COMPRAS"])
-    lat_real = float(vals["LAT"])
-    lat_total = lat_real + lat_simulado
     st.info(
         f"**Mês Vigente**: Realizado LAT {brl(lat_real)} + Simulado LAT {brl(lat_simulado)} "
         f"= **Total LAT {brl(lat_total)}**"
     )
-else:
-    lat_total = lat_simulado
 
-# =========================
-# Cenários e tributos (mês)
-# =========================
+# Cenários e tributos
 with st.expander(f"🎲 {MESES_PT[mes_selecionado]} 2025 - Cenários", expanded=True):
     margem_ref = st.segmented_control(
         "Cenário de referência:",
@@ -366,11 +325,10 @@ with st.expander(f"🎲 {MESES_PT[mes_selecionado]} 2025 - Cenários", expanded=
         format_func=lambda x: f"{int(x*100)}%",
         key="margem_referencia",
     )
-    # Fallback robusto — em algumas versões o widget pode retornar None no primeiro run
     if margem_ref is None:
         margem_ref = 0.20
 
-    cenarios = cenarios_fat_compra(lat_total)  # usa LAT total (real + sim no vigente)
+    cenarios = cenarios_fat_compra(lat_total)
     pis_mes, cofins_mes = pis_cofins(lat_total)
 
     ref_idx = int(margem_ref * 100)
@@ -403,25 +361,18 @@ with st.expander(f"🎲 {MESES_PT[mes_selecionado]} 2025 - Cenários", expanded=
     # IRPJ/CSLL apenas nos meses de fechamento (Mar/Jun/Set/Dez)
     if mes_selecionado in [3, 6, 9, 12]:
         lat_anual = {}
-        for i in range(12):
-            m = i + 1
-            ymm = 2025 * 100 + m
-            if m < mes_vig_num:
-                # meses anteriores: somente realizado
-                lat_anual[ymm] = float(st.session_state["valores_realizados"].get(m, 0.0))
-            elif (m == mes_vig_num) and sim_vigente:
-                # vigente: realizado + simulado
-                lat_r = float(st.session_state["valores_realizados"].get(m, 0.0))
-                lat_s_val = st.session_state["tabela"].at[i, "LAT (R$)"]
-                lat_s = float(lat_s_val) if pd.notna(lat_s_val) else 0.0
-                lat_anual[ymm] = lat_r + lat_s
+        for i in range(1, 13):
+            ymm = 2025 * 100 + i
+            lat_r = float(realizado_dict.get(ymm, {}).get("LAT", 0.0))
+            if i < mes_vig_num:
+                lat_anual[ymm] = lat_r
+            elif i == mes_vig_num:
+                lat_anual[ymm] = lat_r + (float(st.session_state["lat_plan"].get(ymm, 0.0)) if sim_vigente else 0.0)
             else:
-                # futuros: apenas simulado
-                lat_f_val = st.session_state["tabela"].at[i, "LAT (R$)"]
-                lat_anual[ymm] = float(lat_f_val) if pd.notna(lat_f_val) else 0.0
+                lat_anual[ymm] = float(st.session_state["lat_plan"].get(ymm, 0.0))
 
         trib_tri = irpj_csll_trimestre(lat_anual)
-        irpj_mes, csll_mes = trib_tri.get(2025 * 100 + mes_selecionado, (0.0, 0.0))
+        irpj_mes, csll_mes = trib_tri.get(ymm_sel, (0.0, 0.0))
 
         st.markdown(
             f'''
@@ -431,7 +382,7 @@ with st.expander(f"🎲 {MESES_PT[mes_selecionado]} 2025 - Cenários", expanded=
             unsafe_allow_html=True
         )
 
-    # Todos os cenários (cards HTML) — garantir SEMPRE st.markdown(..., unsafe_allow_html=True)
+    # Todos os cenários (cards HTML)
     st.markdown('<div class="section"><h3>Todos os Cenários</h3><div class="sub">FAT e Compras projetados por margem</div></div>',
                 unsafe_allow_html=True)
 
@@ -457,22 +408,15 @@ with st.expander(f"🎲 {MESES_PT[mes_selecionado]} 2025 - Cenários", expanded=
 st.markdown("---")
 
 lat_dict_anual = {}
-for i in range(12):
-    m = i + 1
-    ymm = 2025 * 100 + m
-    if (m < mes_vig_num) or ((m == mes_vig_num) and not sim_vigente):
-        # realizado puro
-        lat_dict_anual[ymm] = float(st.session_state["valores_realizados"].get(m, 0.0))
-    elif (m == mes_vig_num) and sim_vigente:
-        # vigente: real + simulado
-        lat_r = float(st.session_state["valores_realizados"].get(m, 0.0))
-        lat_s_val = st.session_state["tabela"].at[i, "LAT (R$)"]
-        lat_s = float(lat_s_val) if pd.notna(lat_s_val) else 0.0
-        lat_dict_anual[ymm] = lat_r + lat_s
+for i in range(1, 13):
+    ymm = 2025 * 100 + i
+    lat_r = float(realizado_dict.get(ymm, {}).get("LAT", 0.0))
+    if i < mes_vig_num:
+        lat_dict_anual[ymm] = lat_r
+    elif i == mes_vig_num:
+        lat_dict_anual[ymm] = lat_r + (float(st.session_state["lat_plan"].get(ymm, 0.0)) if sim_vigente else 0.0)
     else:
-        # meses futuros: só simulado
-        val_future = st.session_state["tabela"].at[i, "LAT (R$)"]
-        lat_dict_anual[ymm] = float(val_future) if pd.notna(val_future) else 0.0
+        lat_dict_anual[ymm] = float(st.session_state["lat_plan"].get(ymm, 0.0))
 
 tributos_anuais = irpj_csll_trimestre(lat_dict_anual)
 
@@ -514,7 +458,8 @@ with c1:
     df_mes_sel = pd.DataFrame([{
         "Mês": MESES_PT[mes_selecionado],
         "LAT": lat_total,
-        "Cenários": f"Margem 20%: FAT {brl(ref20['FAT'])}, Compras {brl(ref20['COMPRAS'])}",
+        "FAT (20%)": ref20["FAT"],
+        "Compras (20%)": ref20["COMPRAS"],
         "PIS": pis_cofins(lat_total)[0],
         "COFINS": pis_cofins(lat_total)[1],
     }])
@@ -528,9 +473,15 @@ with c1:
 
 with c2:
     # Download consolidado anual (XLSX)
+    def _to_excel_bytes(df):
+        buf = BytesIO()
+        with pd.ExcelWriter(buf, engine="openpyxl") as w:
+            df.to_excel(w, index=False)
+        return buf.getvalue()
+
     st.download_button(
         "📊 Baixar Consolidado Anual XLSX",
-        to_excel(df_consolidado),
+        _to_excel_bytes(df_consolidado),
         file_name="simulacao_anual_2025.xlsx",
         mime="application/vnd.openxmlformats-officedocument.spreadsheetml.sheet",
     )
