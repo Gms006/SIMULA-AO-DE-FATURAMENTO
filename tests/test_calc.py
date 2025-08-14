@@ -17,6 +17,12 @@ def test_vigente_total_real_sim():
     cen = cenarios_por_margem(total)
     assert cen[20]["FAT"] == pytest.approx(total / 0.20)
 
+class TestCalc(unittest.TestCase):
+    def test_margem_20(self):
+        res = calc_por_margem(100000.0, 0.20)
+        self.assertAlmostEqual(res["FAT"], 500000.0, places=2)
+        self.assertAlmostEqual(res["COMPRAS"], 400000.0, places=2)
+        self.assertAlmostEqual(res["ICMS"], 25000.0, places=2)
 
 def test_margem_20():
     res = cenarios_por_margem(100000.0)
