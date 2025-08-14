@@ -78,15 +78,12 @@ App Streamlit para **apurar resultados de 2025** a partir de uma planilha real d
 python -m venv .venv && source .venv/bin/activate  # (Windows: .venv\Scripts\activate)
 pip install -U streamlit pandas numpy plotly openpyxl
 streamlit run app.py
-.
-├─ agents/
-│  └─ planejador_streamlit.agent.md
-├─ app.py
-├─ calc.py
-├─ tests/
-│  └─ test_calc.py
-├─ bootstrap.sh
-└─ README.md
+```
+
+#### Testes
+```bash
+pytest
+```
 
 ### Streamlit Cloud
 1. Faça fork deste repositório no GitHub.
@@ -95,3 +92,9 @@ streamlit run app.py
    - Branch: `main`
    - Main file: `app.py`
 3. Defina as variáveis de ambiente se necessário e finalize o deploy.
+
+## Changelog
+- Sidebar limpa com base PIS/COFINS e alíquotas editáveis.
+- Entrada mensal via `st.data_editor` com botão "Preencher pelos valores reais YTD".
+- Funções puras para margens, PIS/COFINS e IRPJ/CSLL trimestrais em `calc.py`.
+- Tema acessível definido em `.streamlit/config.toml`.
