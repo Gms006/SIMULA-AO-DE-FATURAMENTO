@@ -327,6 +327,9 @@ mes_selecionado = st.segmented_control(
     format_func=lambda x: MESES_PT[x],
     key="selector_mes",
 )
+# Fallback robusto caso o widget retorne None (versões específicas do Streamlit)
+if mes_selecionado is None:
+    mes_selecionado = meses_disponiveis[0]
 st.session_state["mes_selecionado"] = mes_selecionado
 
 # =========================
@@ -363,6 +366,9 @@ with st.expander(f"🎲 {MESES_PT[mes_selecionado]} 2025 - Cenários", expanded=
         format_func=lambda x: f"{int(x*100)}%",
         key="margem_referencia",
     )
+    # Fallback robusto — em algumas versões o widget pode retornar None no primeiro run
+    if margem_ref is None:
+        margem_ref = 0.20
 
     cenarios = cenarios_fat_compra(lat_total)  # usa LAT total (real + sim no vigente)
     pis_mes, cofins_mes = pis_cofins(lat_total)
