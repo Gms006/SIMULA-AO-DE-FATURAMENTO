@@ -35,7 +35,6 @@ def inject_css():
         .panel {border:1px solid #E5E7EB; background:#FFFFFF; border-radius:12px; padding:14px 16px; box-shadow: 0 2px 6px rgba(15,23,42,.05);}
         .panel h4 {margin:0 0 6px 0; font-size:13px; color:#475569; text-transform:uppercase; letter-spacing:.2px;}
         .panel .label {font-size:12px; color:#64748B; margin-bottom:4px;}
-        .panel .row {display:grid; grid-template-columns: 1fr 1fr; gap:12px;}
         .panel .muted { color:#64748B; font-size: 12px; margin-top: 4px; }
 
         .card {
@@ -64,7 +63,7 @@ def inject_css():
         .section h3 {margin:0; font-size: 18px;}
         .section .sub {color:#64748B; font-size: 12.5px; margin-top:2px;}
 
-        /* Dark look (similar ao segundo screenshot) */
+        /* Dark look */
         @media (prefers-color-scheme: dark){
             .panel, .card { background:#0B1220; border-color:#1F2937; }
             .panel h4, .card h4 { color:#94A3B8; }
@@ -211,7 +210,7 @@ if mes_vig_num > 0:
     st.markdown('</div>', unsafe_allow_html=True)
 
 # =========================
-# Planejamento LAT – estilo "steppers" por mês
+# Planejamento LAT – steppers por mês (sem erro de min_value)
 # =========================
 st.markdown(
     '<div class="section"><h3>📝 Planejamento LAT 2025</h3>'
@@ -224,7 +223,6 @@ st.markdown(
 if "mes_selecionado" not in st.session_state:
     st.session_state["mes_selecionado"] = mes_vig_num if mes_vig_num > 0 else 1
 
-# Renderiza expanders por mês (design similar ao do outro app)
 for m in range(1, 13):
     ymm = 2025 * 100 + m
     is_locked = (m < mes_vig_num) or (m == mes_vig_num and not sim_vigente)
@@ -232,23 +230,32 @@ for m in range(1, 13):
 
     with st.expander(f"{MESES_PT[m]}/2025", expanded=(m == st.session_state["mes_selecionado"])):
         st.markdown('<div class="panel">', unsafe_allow_html=True)
-        st.markdown(f'<h4>LAT (R$)</h4><div class="label">{"Travado (somente realizado)" if is_locked else "Informe o LAT do mês"}</div>', unsafe_allow_html=True)
-        val = st.number_input(
-            label="",
-            min_value=0.0,
-            step=100.0,
-            format="%.2f",
-            value=default_val,
-            key=f"lat_input_{ymm}",
-            disabled=is_locked
+        st.markdown(
+            f'<h4>LAT (R$)</h4><div class="label">'
+            f'{"Travado (somente realizado)" if is_locked else "Informe o LAT do mês"}</div>',
+            unsafe_allow_html=True,
         )
-        # Atualiza estado se editável
-        if not is_locked:
+
+        if is_locked:
+            # Mostra somente leitura (pode ser negativo) — evita StreamlitValueBelowMinError
+            st.markdown(f'<div class="value" style="font-size:22px;font-weight:700;">{brl(default_val)}</div>',
+                        unsafe_allow_html=True)
+        else:
+            # Campo editável (somente >= 0)
+            init_val = max(0.0, default_val)
+            val = st.number_input(
+                label="",
+                min_value=0.0,
+                step=100.0,
+                format="%.2f",
+                value=init_val,
+                key=f"lat_input_{ymm}",
+            )
             st.session_state["lat_plan"][ymm] = float(val)
 
-        # Se foi pedida a propagação a partir deste mês
+        # Propagação (apenas se pedida e a partir do mês selecionado)
         if st.session_state.pop("__propagar__", False) and (m == st.session_state["mes_selecionado"]):
-            base = float(st.session_state["lat_plan"][ymm])
+            base = float(st.session_state["lat_plan"].get(ymm, default_val))
             for k in range(m + 1, 13):
                 ymm2 = 2025 * 100 + k
                 is_locked2 = (k < mes_vig_num) or (k == mes_vig_num and not sim_vigente)
@@ -257,14 +264,17 @@ for m in range(1, 13):
                     st.session_state[f"lat_input_{ymm2}"] = base  # reflete no widget
             st.success("Valores propagados para os meses futuros editáveis.")
 
-        # Botões locais
+        # Botões locais (só fazem sentido se editável)
         colA, colB = st.columns(2)
         if colA.button("Usar LAT Real (se houver)", key=f"fill_real_{ymm}"):
             lat_real = float(realizado_dict.get(ymm, {}).get("LAT", 0.0))
-            st.session_state["lat_plan"][ymm] = lat_real
-            st.session_state[f"lat_input_{ymm}"] = lat_real
+            if not is_locked:
+                st.session_state["lat_plan"][ymm] = max(0.0, lat_real)
+                st.session_state[f"lat_input_{ymm}"] = max(0.0, lat_real)
+            else:
+                st.info(f"Valor realizado: {brl(lat_real)}")
         if colB.button("Copiar para os próximos", key=f"copy_next_{ymm}"):
-            base = float(st.session_state["lat_plan"][ymm])
+            base = float(st.session_state["lat_plan"].get(ymm, 0.0))
             for k in range(m + 1, 13):
                 ymm2 = 2025 * 100 + k
                 is_locked2 = (k < mes_vig_num) or (k == mes_vig_num and not sim_vigente)
@@ -295,7 +305,6 @@ if mes_selecionado is None:
 st.session_state["mes_selecionado"] = mes_selecionado
 
 # Cálculos do mês selecionado
-idx_mes = mes_selecionado - 1
 ymm_sel = 2025 * 100 + mes_selecionado
 lat_simulado = float(st.session_state["lat_plan"].get(ymm_sel, 0.0))
 vals_real = realizado_dict.get(ymm_sel, {"FAT": 0.0, "COMPRAS": 0.0, "LAT": 0.0})
@@ -454,20 +463,20 @@ df_consolidado = pd.concat([df_consolidado, totals.to_frame().T], ignore_index=T
 c1, c2 = st.columns(2)
 with c1:
     # Download do mês selecionado (CSV)
-    ref20 = cenarios_fat_compra(lat_total).get(20, {"FAT": 0.0, "COMPRAS": 0.0})
+    ref20 = cenarios_fat_compra(lat_m=lat_dict_anual.get(2025*100+st.session_state["mes_selecionado"], 0.0)).get(20, {"FAT": 0.0, "COMPRAS": 0.0})
     df_mes_sel = pd.DataFrame([{
-        "Mês": MESES_PT[mes_selecionado],
-        "LAT": lat_total,
+        "Mês": MESES_PT[st.session_state["mes_selecionado"]],
+        "LAT": lat_dict_anual.get(2025*100+st.session_state["mes_selecionado"], 0.0),
         "FAT (20%)": ref20["FAT"],
         "Compras (20%)": ref20["COMPRAS"],
-        "PIS": pis_cofins(lat_total)[0],
-        "COFINS": pis_cofins(lat_total)[1],
+        "PIS": pis_cofins(lat_dict_anual.get(2025*100+st.session_state["mes_selecionado"], 0.0))[0],
+        "COFINS": pis_cofins(lat_dict_anual.get(2025*100+st.session_state["mes_selecionado"], 0.0))[1],
     }])
     csv_mes = df_mes_sel.to_csv(index=False).encode("utf-8")
     st.download_button(
-        f"📄 Baixar {MESES_PT[mes_selecionado]} CSV",
+        f"📄 Baixar {MESES_PT[st.session_state['mes_selecionado']]} CSV",
         csv_mes,
-        file_name=f"simulacao_{MESES_PT[mes_selecionado].lower()}_2025.csv",
+        file_name=f"simulacao_{MESES_PT[st.session_state['mes_selecionado']].lower()}_2025.csv",
         mime="text/csv",
     )
 
