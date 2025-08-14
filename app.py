@@ -4,13 +4,11 @@ from io import BytesIO
 from datetime import datetime
 
 from calc import (
-    realizado_por_mes,      # DataFrame mensal (index 1..12) com FAT/COMPRAS/LAT + tributos e yyyymm
-    irpj_csll_trimestre,    # cálculo trimestral (usa dict {yyyymm: LAT})
-    mes_vigente,            # pega último yyyymm com FAT>0 num DF com colunas ["yyyymm","FAT"]
-    prepare_dataframe,      # normalização do DF bruto (não usado diretamente aqui)
+    realizado_por_mes,      # pode retornar DataFrame OU dict por yyyymm → {FAT, COMPRAS, LAT}
+    irpj_csll_trimestre,    # cálculo trimestral a partir de dict {yyyymm: LAT}
     MARGENS,
 )
-from ui_helpers import brl, pis_cofins, yyyymm_to_label, cenarios_fat_compra
+from ui_helpers import brl, pis_cofins, yyyymm_to_label
 
 st.set_page_config(page_title="Simulação de Faturamento 2025", layout="wide")
 
@@ -99,6 +97,55 @@ def to_excel_bytes(df: pd.DataFrame) -> bytes:
         df.to_excel(w, index=False)
     return buf.getvalue()
 
+def ensure_realizado_df(r, ano: int = 2025) -> pd.DataFrame:
+    """
+    Normaliza o retorno de realizado_por_mes para um DataFrame com:
+    index = 1..12 (mês), colunas: FAT, COMPRAS, LAT, yyyymm.
+    Aceita tanto DataFrame quanto dict {yyyymm -> {FAT,COMPRAS,LAT}}.
+    """
+    if isinstance(r, pd.DataFrame):
+        df = r.copy()
+        # garantir colunas
+        for col in ["FAT", "COMPRAS", "LAT"]:
+            if col not in df.columns:
+                df[col] = 0.0
+        # ajustar índice 1..12
+        if "yyyymm" in df.columns:
+            df["yyyymm"] = pd.to_numeric(df["yyyymm"], errors="coerce").fillna(0).astype(int)
+            df["mes"] = df["yyyymm"] % 100
+            df = df.set_index("mes").sort_index()
+        elif "mes" in df.columns:
+            df = df.set_index("mes").sort_index()
+            if "yyyymm" not in df.columns:
+                df["yyyymm"] = [ano * 100 + m for m in df.index]
+        else:
+            # assume índice já é 1..12
+            if "yyyymm" not in df.columns:
+                df["yyyymm"] = [ano * 100 + m for m in df.index]
+        return df[["FAT", "COMPRAS", "LAT", "yyyymm"]]
+    else:
+        # dict-like
+        df = pd.DataFrame.from_dict(r, orient="index")
+        df = df.rename_axis("key").reset_index()
+        df["key_num"] = pd.to_numeric(df["key"], errors="coerce")
+        # se chave parecer yyyymm (>= 1000)
+        if (df["key_num"] >= 1000).any():
+            df["yyyymm"] = df["key_num"].astype("Int64")
+            df["mes"] = (df["yyyymm"] % 100).astype(int)
+        else:
+            # chave é mês 1..12
+            df["mes"] = df["key_num"].fillna(0).astype(int)
+            df["yyyymm"] = ano * 100 + df["mes"]
+        for col in ["FAT", "COMPRAS", "LAT"]:
+            if col not in df.columns:
+                df[col] = 0.0
+        out = df.set_index("mes").sort_index()[["FAT", "COMPRAS", "LAT", "yyyymm"]]
+        # garantir tipo float
+        for col in ["FAT", "COMPRAS", "LAT"]:
+            out[col] = pd.to_numeric(out[col], errors="coerce").fillna(0.0).astype(float)
+        out["yyyymm"] = out["yyyymm"].astype(int)
+        return out
+
 # =========================
 # Sidebar minimalista
 # =========================
@@ -120,7 +167,7 @@ with st.sidebar:
         st.rerun()
 
 # =========================
-# Dados base + realizado + vigente
+# Dados base + realizado + vigente (robusto a DF/dict)
 # =========================
 df_raw = load_data()
 if df_raw.empty:
@@ -131,16 +178,17 @@ if df_raw.empty:
     else:
         st.stop()
 
-# Consolidado realizado por mês (fonte para KPIs e vigente)
-realizado_df = realizado_por_mes(df_raw)  # index 1..12; col "yyyymm","FAT","COMPRAS","LAT",...
-vigente_yyyymm = mes_vigente(realizado_df) if not realizado_df.empty else 0
+rpm_raw = realizado_por_mes(df_raw)            # DataFrame OU dict
+realizado_df = ensure_realizado_df(rpm_raw)    # DataFrame normalizado
+
+# mês vigente = MAIOR yyyymm com FAT > 0
+vigente_yyyymm = int(realizado_df.loc[realizado_df["FAT"] > 0, "yyyymm"].max()) if not realizado_df.empty else 0
 mes_vig_num = (vigente_yyyymm % 100) if vigente_yyyymm else 0
 if mes_vig_num == 0:
-    # Sem FAT registrado no ano → padrão: mês atual
+    # Sem FAT registrado no ano → usa mês atual
     mes_vig_num = datetime.today().month
     vigente_yyyymm = 2025 * 100 + mes_vig_num
 
-# Mapas rápidos do realizado
 def val_real(mes: int, col: str) -> float:
     try:
         return float(realizado_df.at[mes, col]) if mes in realizado_df.index else 0.0
@@ -209,7 +257,7 @@ st.markdown(
 )
 
 if "mes_selecionado" not in st.session_state:
-    st.session_state["mes_selecionado"] = mes_vig_num
+    st.session_state["mes_selecionado"] = mes_vig_num or 1
 
 for m in range(1, 13):
     ymm = 2025*100 + m
@@ -234,7 +282,7 @@ for m in range(1, 13):
                 key=f"lat_input_{ymm}",
             )
             st.session_state["lat_plan"][ymm] = float(val)
-            # Ação local: copiar para próximos
+            # Ações locais
             colA, colB = st.columns(2)
             if colA.button("Copiar para os próximos", key=f"copy_next_{ymm}"):
                 base = float(st.session_state["lat_plan"][ymm])
@@ -247,7 +295,6 @@ for m in range(1, 13):
                 st.success("Valores copiados para os próximos meses editáveis.")
             if colB.button("Usar LAT Real (se houver)", key=f"use_real_{ymm}"):
                 if m == mes_vig_num and sim_vigente:
-                    # Para o vigente, o input representa o adicional (será somado ao real)
                     st.info(f"LAT realizado {brl(lat_real_m)} será somado ao simulado na simulação.")
                 else:
                     st.session_state["lat_plan"][ymm] = lat_real_m
@@ -286,7 +333,7 @@ if mes_selecionado is None:
     mes_selecionado = st.session_state["mes_selecionado"]
 st.session_state["mes_selecionado"] = mes_selecionado
 
-# Determina LAT_total, FAT/COMPRAS realizados (para "a emitir")
+# Determina LAT_total (vigente soma real+sim se permitido)
 lat_sim = float(st.session_state["lat_plan"][2025*100 + mes_selecionado])
 lat_real_sel = val_real(mes_selecionado, "LAT")
 fat_real_sel = val_real(mes_selecionado, "FAT")
@@ -306,7 +353,6 @@ else:
 
 with st.expander(f"🎲 {MESES_PT[mes_selecionado]} 2025 - Cenários por margem", expanded=not is_past):
     if is_past:
-        # Exibe só realizado
         st.markdown('<div class="metric-grid">', unsafe_allow_html=True)
         st.markdown(
             f"""
@@ -318,7 +364,7 @@ with st.expander(f"🎲 {MESES_PT[mes_selecionado]} 2025 - Cenários por margem"
         )
         st.markdown('</div>', unsafe_allow_html=True)
     else:
-        # Cenário de referência (20%) apenas para destacar
+        # Margem de referência apenas visual
         margem_ref = st.segmented_control(
             "Cenário de referência:",
             options=MARGENS,
@@ -327,19 +373,15 @@ with st.expander(f"🎲 {MESES_PT[mes_selecionado]} 2025 - Cenários por margem"
             key="margem_referencia",
         ) or 0.20
 
-        # Totais projetados pela margem r (LAT = FAT - COMPRAS; r = LAT/FAT)
+        # Totais e "a emitir" por cada margem r
         cenarios = {}
         for r in MARGENS:
-            # Totais daquele cenário:
-            # Se LAT_total >= 0 → ok: FAT_total = LAT_total/r
-            # Se LAT_total < 0 → FAT_total fica negativo (inviável como "a emitir")
             fat_total = (lat_total / r) if r > 0 else 0.0
             compras_total = fat_total - lat_total
-            # A emitir:
             if is_vig:
                 fat_emitir = max(0.0, fat_total - fat_real_sel)
                 compras_emitir = max(0.0, compras_total - compras_real_sel)
-            else:  # futuro
+            else:
                 fat_emitir = max(0.0, fat_total)
                 compras_emitir = max(0.0, compras_total)
             cenarios[int(r*100)] = {
@@ -349,7 +391,7 @@ with st.expander(f"🎲 {MESES_PT[mes_selecionado]} 2025 - Cenários por margem"
                 "COMPRA_EMITIR": compras_emitir,
             }
 
-        # Cards da margem de referência (totais + a emitir)
+        # Cards da margem de referência
         ref = cenarios[int(margem_ref*100)]
         st.markdown(f'<div class="section"><h3>Cenário {int(margem_ref*100)}% (Referência)</h3></div>', unsafe_allow_html=True)
         st.markdown('<div class="metric-grid">', unsafe_allow_html=True)
@@ -390,7 +432,7 @@ with st.expander(f"🎲 {MESES_PT[mes_selecionado]} 2025 - Cenários por margem"
         )
         st.markdown('</div>', unsafe_allow_html=True)
 
-        # IRPJ/CSLL no fechamento de trimestre (Mar/Jun/Set/Dez)
+        # IRPJ/CSLL somente em Mar/Jun/Set/Dez
         if mes_selecionado in [3, 6, 9, 12]:
             lat_anual = {}
             for m in range(1, 13):
@@ -411,7 +453,7 @@ with st.expander(f"🎲 {MESES_PT[mes_selecionado]} 2025 - Cenários por margem"
                 unsafe_allow_html=True
             )
 
-        # Todos os cenários — cards HTML (sem <div> literal aparecendo na tela)
+        # Todos os cenários — cards HTML
         st.markdown('<div class="section"><h3>Todos os Cenários</h3><div class="sub">Totais do mês e valores a emitir por margem</div></div>', unsafe_allow_html=True)
         cards_html = '<div class="kpi-grid">'
         for margem_pct in sorted(cenarios.keys()):
@@ -430,11 +472,10 @@ with st.expander(f"🎲 {MESES_PT[mes_selecionado]} 2025 - Cenários por margem"
         st.markdown(cards_html, unsafe_allow_html=True)
 
 # =========================
-# Exportações (margem 20% como referência rápida)
+# Exportações (margem 20% como referência visual)
 # =========================
 st.markdown("---")
 
-# Monta dataframe consolidado (referência 20%) usando LAT_total de cada mês
 rows = []
 lat_dict_anual = {}
 for m in range(1, 13):
