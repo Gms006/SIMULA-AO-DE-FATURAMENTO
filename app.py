@@ -55,7 +55,6 @@ df = prepare_dataframe(df)
 realizado = compute_realizado(df)
 ultimo = ultimo_yyyymm(df)
 last_month = ultimo % 100
-
 def fmt_brl(v: float) -> str:
     return f"R$ {v:,.2f}".replace(",", "X").replace(".", ",").replace("X", ".")
 
