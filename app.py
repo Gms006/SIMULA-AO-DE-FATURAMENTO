@@ -380,9 +380,9 @@ with st.expander(f"🎲 {MESES_PT[mes_selecionado]} 2025 - Cenários", expanded=
     st.markdown('<div class="metric-grid">', unsafe_allow_html=True)
     st.markdown(
         f'''
-        <div class="card"><h4>Faturamento</h4><p class="value">{brl(ref_cenario["FAT"])}</p>
+        <div class="card"><h4>Faturamento (projetado)</h4><p class="value">{brl(ref_cenario["FAT"])}</p>
         {'<div class="muted">Real: ' + brl(fat_real) + '</div>' if fat_real > 0 else ''}</div>
-        <div class="card"><h4>Compras</h4><p class="value">{brl(ref_cenario["COMPRAS"])}</p>
+        <div class="card"><h4>Compras (projetadas)</h4><p class="value">{brl(ref_cenario["COMPRAS"])}</p>
         {'<div class="muted">Real: ' + brl(compras_real) + '</div>' if compras_real > 0 else ''}</div>
         <div class="card"><h4>ICMS (5%)</h4><p class="value">{brl(ref_cenario["ICMS"])}</p></div>
         ''',
@@ -431,22 +431,24 @@ with st.expander(f"🎲 {MESES_PT[mes_selecionado]} 2025 - Cenários", expanded=
             unsafe_allow_html=True
         )
 
-    # Todos os cenários (cards HTML)
-    st.markdown('<div class="section"><h3>Todos os Cenários</h3><div class="sub">Variação de FAT e Compras por margem</div></div>',
+    # Todos os cenários (cards HTML) — garantir SEMPRE st.markdown(..., unsafe_allow_html=True)
+    st.markdown('<div class="section"><h3>Todos os Cenários</h3><div class="sub">FAT e Compras projetados por margem</div></div>',
                 unsafe_allow_html=True)
 
-    cenarios_html = '<div class="kpi-grid">'
+    cards = []
     for margem_pct in sorted(cenarios.keys()):
         cen = cenarios[margem_pct]
         classe_css = "ok" if margem_pct >= 20 else "warn" if margem_pct >= 10 else "bad"
-        cenarios_html += f'''
+        cards.append(
+            f'''
             <div class="card {classe_css}">
                 <h4>Margem {margem_pct}%</h4>
                 <p class="value">{brl(cen["FAT"])}</p>
                 <div class="muted">Compras: {brl(cen["COMPRAS"])}</div>
             </div>
-        '''
-    cenarios_html += '</div>'
+            '''
+        )
+    cenarios_html = f'<div class="kpi-grid">{"".join(cards)}</div>'
     st.markdown(cenarios_html, unsafe_allow_html=True)
 
 # =========================
