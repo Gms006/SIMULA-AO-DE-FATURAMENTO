@@ -13,16 +13,54 @@ from calc import (
     irpj_csll_trimestre,
 )
 
+# Configuração da página
 st.set_page_config(page_title="Simulação de Faturamento 2025", layout="wide")
+
+# CSS personalizado para cards e styling
 st.markdown(
     """
 <style>
-div.stMetric{border:1px solid #E0E0E0;padding:10px;border-radius:4px;background-color:#F6F8FC}
+div.stMetric {
+    border: 1px solid #E0E0E0;
+    padding: 15px;
+    border-radius: 8px;
+    background-color: #F6F8FC;
+    box-shadow: 0 1px 3px rgba(0,0,0,0.1);
+}
+
+.card-margem {
+    border: 1px solid #E0E0E0;
+    padding: 15px;
+    border-radius: 8px;
+    background-color: #FFFFFF;
+    margin: 10px 0;
+    box-shadow: 0 1px 3px rgba(0,0,0,0.1);
+}
+
+.card-titulo {
+    font-weight: bold;
+    font-size: 16px;
+    color: #0F172A;
+    margin-bottom: 8px;
+}
+
+.badge-trimestre {
+    display: inline-block;
+    padding: 4px 8px;
+    border-radius: 4px;
+    font-size: 12px;
+    font-weight: bold;
+    color: white;
+}
+
+.badge-completo { background-color: #10B981; }
+.badge-incompleto { background-color: #F59E0B; }
 </style>
 """,
     unsafe_allow_html=True,
 )
 
+# Sidebar para parâmetros GitHub
 st.sidebar.header("Parâmetros GitHub")
 owner = st.sidebar.text_input("Owner", value="")
 repo = st.sidebar.text_input("Repo", value="SIMULACAO-DE-FATURAMENTO")
@@ -31,17 +69,21 @@ path = st.sidebar.text_input("Path", value="resultado_eduardo_veiculos.xlsx")
 
 @st.cache_data(ttl=300)
 def load_data(owner: str, repo: str, branch: str, path: str):
+    """Carrega dados do GitHub com fallback local e uploader."""
     if owner:
         url = f"https://raw.githubusercontent.com/{owner}/{repo}/{branch}/{path}"
         try:
             return pd.read_excel(url, engine="openpyxl")
         except Exception:
             st.warning("Falha ao carregar do GitHub.")
+    
+    # Fallback para arquivo local
     try:
         return pd.read_excel(path, engine="openpyxl")
     except Exception:
         return None
 
+# Carregamento dos dados
 df = load_data(owner, repo, branch, path)
 if df is None:
     uploaded = st.file_uploader("Envie a planilha resultado_eduardo_veiculos.xlsx", type="xlsx")
@@ -49,199 +91,191 @@ if df is None:
         df = pd.read_excel(uploaded, engine="openpyxl")
 
 if df is None:
+    st.error("Não foi possível carregar os dados. Verifique o arquivo ou parâmetros GitHub.")
     st.stop()
 
+# Processamento dos dados
 df = prepare_dataframe(df)
 realizado = compute_realizado(df)
 ultimo = ultimo_yyyymm(df)
-last_month = ultimo % 100
+last_month = ultimo % 100 if ultimo else 0
+
 def fmt_brl(v: float) -> str:
+    """Formata valor em Real brasileiro."""
     return f"R$ {v:,.2f}".replace(",", "X").replace(".", ",").replace("X", ".")
 
+# Mapeamento de meses para português
 MESES_PT = {
-    1: "Jan",
-    2: "Fev",
-    3: "Mar",
-    4: "Abr",
-    5: "Mai",
-    6: "Jun",
-    7: "Jul",
-    8: "Ago",
-    9: "Set",
-    10: "Out",
-    11: "Nov",
-    12: "Dez",
+    1: "Jan", 2: "Fev", 3: "Mar", 4: "Abr", 5: "Mai", 6: "Jun",
+    7: "Jul", 8: "Ago", 9: "Set", 10: "Out", 11: "Nov", 12: "Dez",
 }
 
-pagina = st.sidebar.selectbox("Página", ["Dashboard", "Simulação", "Notas/Detalhes"])
+# Seletor de página no sidebar
+pagina = st.sidebar.selectbox("Página", ["Simulação", "Dashboard", "Notas/Detalhes"])
 
-if pagina == "Dashboard":
-    ano = st.sidebar.selectbox("Ano", [2025], index=0)
-    mes = st.sidebar.selectbox("Mês", list(range(1, 13)), index=max(last_month - 1, 0))
-    linha = realizado.loc[mes]
-    col1, col2, col3, col4, col5 = st.columns(5)
-    col1.metric("Entradas", fmt_brl(linha["CMV"]))
-    col2.metric("Saídas", fmt_brl(linha["FAT"]))
-    col3.metric("LAT", fmt_brl(linha["LAT"]))
-    col4.metric("Lucro Líquido", fmt_brl(linha["LL"]))
-    col5.metric("Consumo", fmt_brl(linha["CONSUMO"]))
-    mensal = realizado.copy()
-    mensal["Tributos"] = mensal[["PIS", "COFINS", "ICMS", "IRPJ", "CSLL"]].sum(axis=1)
-    fig = px.bar(mensal, x=mensal.index, y=["FAT", "CMV", "CONSUMO", "LAT", "Tributos", "LL"], barmode="stack")
-    fig.update_layout(xaxis_title="Mês", yaxis_title="R$")
-    st.plotly_chart(fig, use_container_width=True)
-
-elif pagina == "Simulação":
-    st.header("Cenários por Margem – mensal e trimestral")
-    lat_sim = st.session_state.setdefault("lat_sim", {})
-
-    fat_ytd = realizado.loc[1:last_month, "FAT"].sum()
-    lat_ytd = realizado.loc[1:last_month, "LAT"].sum()
+if pagina == "Simulação":
+    st.title("Simulação de Faturamento 2025")
+    
+    # Inicializar session state para LAT simulado
+    if "lat_sim" not in st.session_state:
+        st.session_state["lat_sim"] = {}
+    
+    lat_sim = st.session_state["lat_sim"]
+    
+    # === RESUMO YTD (Topo) ===
+    st.subheader("Resumo 2025")
+    
+    # Calcular YTD apenas com dados reais (travados)
+    if last_month > 0:
+        fat_ytd = realizado.loc[1:last_month, "FAT"].sum()
+        lat_ytd = realizado.loc[1:last_month, "LAT"].sum()
+    else:
+        fat_ytd = lat_ytd = 0.0
+    
     col1, col2 = st.columns(2)
     col1.metric("Faturado YTD", fmt_brl(fat_ytd))
     col2.metric("LAT YTD", fmt_brl(lat_ytd))
-
+    
+    # === LINHA DE MESES (Chips) ===
+    st.markdown("---")
+    
     col_mes, col_toggle = st.columns([4, 1])
+    
     with col_toggle:
         sim_vigente = st.checkbox("Simular mês vigente", False)
+    
+    # Determinar meses simuláveis
     meses_disp = meses_simulaveis(ultimo)
-    if sim_vigente and ultimo not in meses_disp:
+    if sim_vigente and ultimo > 0 and ultimo not in meses_disp:
         meses_disp.insert(0, ultimo)
+    
     if not meses_disp:
-        st.info("Todos os meses de 2025 já estão realizados.")
+        st.info("Todos os meses de 2025 já estão realizados ou não há dados disponíveis.")
         st.stop()
+    
     with col_mes:
         mes_atual = st.segmented_control(
             "Meses simuláveis",
             meses_disp,
-            key="mes_atual",
             selection=st.session_state.get("mes_atual", meses_disp[0]),
             format_func=lambda m: MESES_PT[m % 100],
         )
-
+    
+    st.session_state["mes_atual"] = mes_atual
+    
+    # === EDITOR DO MÊS SELECIONADO ===
+    st.markdown("---")
+    st.subheader(f"Editor: {MESES_PT[mes_atual % 100].upper()} {mes_atual // 100}")
+    
+    # Input LAT do mês
     lat_val = lat_sim.get(mes_atual, 0.0)
-    lat_input = st.number_input(
-        "LAT do mês (R$)",
-        min_value=0.0,
-        step=1000.0,
-        value=lat_val,
-        key=f"lat_{mes_atual}",
-    )
+    col_lat, col_prop = st.columns([3, 1])
+    
+    with col_lat:
+        lat_input = st.number_input(
+            "LAT do mês (R$)",
+            min_value=0.0,
+            step=1000.0,
+            value=lat_val,
+            key=f"lat_{mes_atual}",
+        )
+    
+    with col_prop:
+        propagar = st.checkbox("Aplicar este LAT aos próximos meses")
+    
+    # Atualizar session state
     lat_sim[mes_atual] = lat_input
-    propagar = st.checkbox("Aplicar este LAT aos próximos meses")
+    
+    # Auto-propagação se solicitada
     if propagar:
         for m in meses_disp:
             if m >= mes_atual:
                 lat_sim[m] = lat_input
-
+    
+    # === CARDS POR MARGEM (6 cards; 2 colunas × 3 linhas) ===
+    st.markdown("#### Cenários por Margem")
+    
+    # Calcular cenários para o LAT atual
     res_mes = calc_mes(lat_input)
     cenarios = res_mes["cenarios"]
     margens = [0.05, 0.10, 0.15, 0.20, 0.25, 0.30]
+    
+    # Layout: 3 linhas com 2 colunas cada
     for i in range(0, 6, 2):
-        c1, c2 = st.columns(2)
-        for j, m in enumerate(margens[i:i+2]):
-            col = c1 if j == 0 else c2
-            with col:
-                st.markdown(f"**Margem {int(m*100)}%**")
+        col1, col2 = st.columns(2)
+        
+        # Primeira coluna
+        with col1:
+            m = margens[i]
+            st.markdown(f'<div class="card-margem"><div class="card-titulo">Margem {int(m*100)}%</div></div>', unsafe_allow_html=True)
+            st.metric("Faturamento", fmt_brl(cenarios[m]["FAT"]))
+            st.metric("Compras", fmt_brl(cenarios[m]["COMPRAS"]))
+        
+        # Segunda coluna (se houver)
+        if i + 1 < len(margens):
+            with col2:
+                m = margens[i + 1]
+                st.markdown(f'<div class="card-margem"><div class="card-titulo">Margem {int(m*100)}%</div></div>', unsafe_allow_html=True)
                 st.metric("Faturamento", fmt_brl(cenarios[m]["FAT"]))
                 st.metric("Compras", fmt_brl(cenarios[m]["COMPRAS"]))
-
+    
+    # === CARDS DE TRIBUTOS DO MÊS ===
+    st.markdown("#### Tributos do Mês")
+    
     pis = res_mes["PIS"]
     cofins = res_mes["COFINS"]
-    icms_ref = cenarios[0.20]["ICMS"]
-    c1, c2, c3 = st.columns(3)
-    c1.metric("PIS (mês)", fmt_brl(pis))
-    c2.metric("COFINS (mês)", fmt_brl(cofins))
-    c3.metric("ICMS (mês)", fmt_brl(icms_ref))
+    icms_ref = cenarios[0.20]["ICMS"]  # ICMS usando margem 20% como referência
+    
+    col1, col2, col3 = st.columns(3)
+    col1.metric("PIS (mês)", fmt_brl(pis))
+    col2.metric("COFINS (mês)", fmt_brl(cofins))
+    col3.metric("ICMS (mês)*", fmt_brl(icms_ref))
+    
     st.caption("*ICMS depende do faturamento (varia por margem)")
-
-    lat_total = {202500 + m: realizado.loc[m, "LAT"] for m in range(1, 13)}
+    
+    # === OBRIGAÇÕES TRIMESTRAIS ===
+    st.markdown("---")
+    st.subheader("Obrigações do Trimestre")
+    
+    # Combinar dados reais + simulados
+    lat_total = {}
+    
+    # Adicionar dados reais (travados)
+    for m in range(1, 13):
+        if 202500 + m <= ultimo:
+            lat_total[202500 + m] = realizado.loc[m, "LAT"]
+    
+    # Adicionar simulados
     lat_total.update(lat_sim)
+    
+    # Avaliar progresso do trimestre atual
     tri_key = trimestre_de(mes_atual)
     prog, total, faltantes = progresso_trimestre(lat_total, tri_key)
-    st.subheader("Obrigações do Trimestre")
-    st.markdown(f"**Completo {prog}/{total}**")
+    
+    # Badge de progresso
+    badge_class = "badge-completo" if prog == total else "badge-incompleto"
+    st.markdown(f'<span class="badge-trimestre {badge_class}">Completo {prog}/{total}</span>', unsafe_allow_html=True)
+    
+    # Alerta e botões para meses faltantes
     if prog < total:
         st.warning("Complete os 3 meses para apurar o trimestre")
-        cols = st.columns(len(faltantes))
-        for idx, m in enumerate(faltantes):
-            if cols[idx].button(MESES_PT[m % 100], key=f"goto_{m}"):
-                st.session_state["mes_atual"] = m
-                st.experimental_rerun()
+        if faltantes:
+            cols = st.columns(len(faltantes))
+            for idx, m in enumerate(faltantes):
+                if m in meses_disp:  # Só mostrar botão se o mês for simulável
+                    if cols[idx].button(MESES_PT[m % 100], key=f"goto_{m}"):
+                        st.session_state["mes_atual"] = m
+                        st.rerun()
+    
+    # Calcular IRPJ/CSLL do trimestre
     irpj, csll, fechamento = irpj_csll_trimestre(lat_total, tri_key)
-    c1, c2 = st.columns(2)
+    
+    # Mostrar IRPJ/CSLL apenas se estivermos no mês de fechamento E o trimestre estiver completo
+    col1, col2 = st.columns(2)
+    
     if mes_atual == fechamento and prog == total:
-        c1.metric(f"IRPJ – {MESES_PT[fechamento % 100]}", fmt_brl(irpj))
-        c2.metric(f"CSLL – {MESES_PT[fechamento % 100]}", fmt_brl(csll))
+        col1.metric(f"IRPJ – {MESES_PT[fechamento % 100]} (trimestre)", fmt_brl(irpj))
+        col2.metric(f"CSLL – {MESES_PT[fechamento % 100]} (trimestre)", fmt_brl(csll))
     else:
-        c1.metric("IRPJ – trimestre", fmt_brl(0.0))
-        c2.metric("CSLL – trimestre", fmt_brl(0.0))
-
-    rows = []
-    for m in margens:
-        rows.append({"Item": f"Margem {int(m*100)}% FAT", "Valor": cenarios[m]["FAT"]})
-        rows.append({"Item": f"Margem {int(m*100)}% Compras", "Valor": cenarios[m]["COMPRAS"]})
-    rows.append({"Item": "PIS", "Valor": pis})
-    rows.append({"Item": "COFINS", "Valor": cofins})
-    rows.append({"Item": "ICMS (20%)", "Valor": icms_ref})
-    df_export = pd.DataFrame(rows)
-    csv = df_export.to_csv(index=False).encode("utf-8")
-    st.download_button("Exportar Resumo CSV", csv, f"resumo_{mes_atual}.csv", "text/csv")
-    try:
-        from reportlab.lib.pagesizes import A4
-        from reportlab.pdfgen import canvas
-        pdf_buffer = BytesIO()
-        c = canvas.Canvas(pdf_buffer, pagesize=A4)
-        c.drawString(30, 800, f"Resumo {MESES_PT[mes_atual % 100]} 2025")
-        text = c.beginText(30, 780)
-        for _, row in df_export.iterrows():
-            text.textLine(f"{row['Item']}: {fmt_brl(row['Valor'])}")
-        c.drawText(text)
-        c.showPage()
-        c.save()
-        pdf_buffer.seek(0)
-        st.download_button(
-            "Exportar Resumo PDF",
-            pdf_buffer,
-            f"resumo_{mes_atual}.pdf",
-            "application/pdf",
-        )
-    except Exception:
-        st.info("reportlab não disponível para PDF.")
-
-    if st.checkbox("Mostrar detalhes (opcional)"):
-        detalhes = []
-        for m in meses_disp:
-            latm = lat_sim.get(m, 0.0)
-            resm = calc_mes(latm)
-            cen20 = resm["cenarios"][0.20]
-            detalhes.append(
-                {
-                    "Mês": MESES_PT[m % 100],
-                    "LAT": latm,
-                    "FAT_20%": cen20["FAT"],
-                    "Compras_20%": cen20["COMPRAS"],
-                    "PIS": resm["PIS"],
-                    "COFINS": resm["COFINS"],
-                    "ICMS_20%": cen20["ICMS"],
-                }
-            )
-        st.dataframe(pd.DataFrame(detalhes))
-elif pagina == "Notas/Detalhes":
-    st.header("Notas/Detalhes")
-    meses = st.multiselect("Mês", sorted(df["mes"].unique()), default=sorted(df["mes"].unique()))
-    tipos = st.multiselect("Tipo Nota", sorted(df["tipo_nota"].unique()), default=sorted(df["tipo_nota"].unique()))
-    classifs = st.multiselect("Classificação", sorted(df["classificacao"].unique()), default=sorted(df["classificacao"].unique()))
-    filtrado = df[df["mes"].isin(meses) & df["tipo_nota"].isin(tipos) & df["classificacao"].isin(classifs)]
-    st.dataframe(filtrado)
-    csv = filtrado.to_csv(index=False).encode("utf-8")
-    st.download_button("Download CSV", csv, "notas_filtradas.csv", "text/csv")
-    towrite = BytesIO()
-    with pd.ExcelWriter(towrite, engine="openpyxl") as writer:
-        filtrado.to_excel(writer, index=False)
-    st.download_button(
-        "Download XLSX",
-        towrite.getvalue(),
-        "notas_filtradas.xlsx",
-        "application/vnd.openxmlformats-officedocument.spreadsheetml.sheet",
-    )
+        col1.metric("IRPJ – trimestre", fmt_brl(0.0))
+        col2.metric("CSLL – trimestre",
