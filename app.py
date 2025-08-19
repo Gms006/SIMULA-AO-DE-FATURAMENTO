@@ -357,17 +357,28 @@ with st.expander(f"🎲 {MESES_PT[mes_selecionado]} 2025 - Cenários por margem"
             }
 
         ref = cenarios[int(margem_ref*100)]
+        real_fat_html = (
+            f'<div class="muted">Realizado: {brl(fat_real_sel)}</div>' if is_vig else ''
+        )
+        real_comp_html = (
+            f'<div class="muted">Realizado: {brl(compras_real_sel)}</div>' if is_vig else ''
+        )
+        lat_info_html = (
+            '<div class="muted">Inclui realizado + simulado</div>'
+            if is_vig and sim_vigente
+            else ''
+        )
         html_ref = (
             '<div class="section"><h3>Cenário ' + str(int(margem_ref*100)) + '% (Referência)</h3></div>'
             '<div class="metric-grid">'
             f'<div class="card"><h4>Faturamento (total do mês)</h4><p class="value">{brl(ref["FAT_TOTAL"])}</p>'
-            f'{"<div class=\\"muted\\">Realizado: " + brl(fat_real_sel) + "</div>" if is_vig else ""}'
+            f'{real_fat_html}'
             f'<div class="muted">A emitir: {brl(ref["FAT_EMITIR"])}</div></div>'
             f'<div class="card"><h4>Compras (total do mês)</h4><p class="value">{brl(ref["COMPRA_TOTAL"])}</p>'
-            f'{"<div class=\\"muted\\">Realizado: " + brl(compras_real_sel) + "</div>" if is_vig else ""}'
+            f'{real_comp_html}'
             f'<div class="muted">A emitir: {brl(ref["COMPRA_EMITIR"])}</div></div>'
             f'<div class="card"><h4>LAT do mês</h4><p class="value">{brl(lat_total)}</p>'
-            f'{"<div class=\\"muted\\">Inclui realizado + simulado</div>" if is_vig and sim_vigente else ""}'
+            f'{lat_info_html}'
             '</div>'
         )
         st.markdown(html_ref, unsafe_allow_html=True)
